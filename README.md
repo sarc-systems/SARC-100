@@ -4,7 +4,7 @@ Dual-spectrum harmonic resonator for Bela Gem Multi — edit on Mac in Cursor, d
 
 ## Spectra
 
-Two **node lists** (15 nodes each), frequency-ordered from subharmonics through harmonics:
+Two **node lists** (11 nodes each), ratios: ⅛, ⅙, ¼, ⅓, ½, 1, ³⁄₂, 2, ⁵⁄₂, 3, ⁷⁄₂ of each spectrum’s F0:
 
 - **Spectrum A** (audio out L): detuned **down** from center `F0`
 - **Spectrum B** (audio out R): detuned **up** from center `F0`
