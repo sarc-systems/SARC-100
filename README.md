@@ -1,88 +1,53 @@
 # kosc
 
-`kosc` is a Bela C++ project built around a two-channel harmonic resonator network.
-The main DSP implementation lives in `render.cpp`.
+Dual-spectrum harmonic resonator for Bela Gem Multi — edit on Mac in Cursor, deploy with `bela-tools`.
 
-Current runtime note: this patch is running at about 33% CPU, so there is room for
-further sound design and structural experiments.
+## Spectra
 
-## Architecture at a glance
+Two **node lists** (15 nodes each), frequency-ordered from subharmonics through harmonics:
 
-- 15 nodes (`NUM_OSCS`) per channel
-- Frequency map per node: subharmonics -> fundamental -> harmonics
-- Multipliers: `1/8, 1/7, ..., 1/2, 1, 2, ..., 8`
-- Per-node oscillator + per-node bandpass excitation and envelope
-- Cross-node coupling matrix for harmonic diffusion (`Spread`)
-- Rotating input and output scanners for timbral movement
+- **Spectrum A** (audio out L): detuned **down** from center `F0`
+- **Spectrum B** (audio out R): detuned **up** from center `F0`
+- At **Detune = 0**, same frequencies and **phase-locked** oscillators
 
-## Signal flow
+## I/O (current wiring)
 
-Per audio frame, each channel does:
+| Jack | Path |
+|------|------|
+| **Audio in 0 / 1** | **All in** A / B — uniform drive on every node (+ cross-spectrum feedback bus) |
+| **Audio out 0 / 1** | **Scan out** A / B — crossfade between adjacent nodes (`Output A/B Scan` CV) |
+| **SYNC A / B** | Digital inputs → rising edge resets that spectrum’s phases |
 
-1. Read input sample and update smoothed input envelope
-2. Compute input scanner crossfade weights across adjacent nodes
-3. For each node:
-   - Bandpass filter the injected signal
-   - Track node envelope with attack/decay smoothing
-   - Advance phase and generate sine output
-4. Apply asymmetric coupling diffusion across node envelopes
-5. Output scanner selects/interpolates between adjacent nodes
-6. Write stereo outputs with global amplitude scaling
+Scan in on dedicated jacks is planned; **Input A/B Scan** CV is reserved for that. **Output A/B Scan** drives main audio outputs.
 
-## Controls (GuiController)
+## Signal flow (per frame)
 
-- `F0 (Hz)`: fundamental used to derive all node frequencies
-- `Spread`: amount of envelope diffusion through coupling matrix
-- `Input A Rotation`, `Input B Rotation`: where each channel injects energy
-- `Output A Rotation`, `Output B Rotation`: where each channel reads out
-- `Node Env Attack`, `Node Env Decay`: envelope response per node
+1. **All in** on audio + cross-spectrum bus per spectrum
+2. Per node: uniform drive → bandpass → envelope → sine (slow family-correlated drift)
+3. Coupling (**Spread**) through short memory + energy budget
+4. **Scan out** on main audio outputs (Output A/B Scan CV)
 
-## File guide
+## Controls (GUI — dev; map to 8 CV + digital SYNC)
 
-- `render.cpp`: DSP graph, coupling logic, scanners, and GUI controls
-- `settings.json`: Bela runtime/audio/analog configuration
-- `.bela-host`: default SSH target host for deploy tooling
-- `.vscode/tasks.json`: Cursor tasks for deploy/sync/stop via `bela-tools`
-- `stubs/`: editor-only fallback headers used by IntelliSense on macOS when Bela SDK headers are not installed locally
-- `.gitignore`: local artifact exclusions
+| Control | Role |
+|--------|------|
+| F0 (Hz) | Center frequency |
+| Detune | A = F0×(1−d), B = F0×(1+d) |
+| Osc Phase | Global offset [0, 2π] |
+| Spread | Coupling / diffusion |
+| Input A/B Scan | Reserved for future scan-in jacks |
+| Output A/B Scan | Scan-out position on main audio outputs |
+| A bus → B in / B bus → A in | Cross-spectrum feed [0, 2] |
+| Node Env Attack / Decay | Envelope shape |
+| In A/B Peak (1=clip) | Main audio input peak hold — **≥ 1.0 ≈ clip** (label turns red via `sketch.js`) |
+| Out A/B Peak (1=clip) | Main audio output peak hold — same scale and clip styling |
 
-## Development workflow (Cursor + bela-tools)
+Internal: energy reserve, drift depth, coupling memory (`render.cpp`).
 
-From the `kosc` folder in Cursor:
-
-- Deploy and run: `Terminal -> Run Task -> Bela: Deploy`
-- Sync only: `Terminal -> Run Task -> Bela: Sync only`
-- Stop audio: `Terminal -> Run Task -> Bela: Stop`
-
-Equivalent CLI:
+## Deploy
 
 ```bash
-bela deploy .
-bela sync .
-bela stop
+bela deploy ~/scripts/kosc
 ```
 
-## Safe first experiments
-
-If you want to evolve the patch while keeping behavior predictable:
-
-- Change node frequency set (`mult[]`) to alternate harmonic systems
-- Modify coupling threshold and weight law in `buildCouplingWeights()`
-- Try different envelope curves in the node attack/decay branch
-- Replace sine output with lightweight waveshaping per node
-- Add optional per-node damping tied to frequency region
-
-## Planned roadmap
-
-The next design steps for this instrument:
-
-- Sync behavior between channels (e.g. channel 2 sync'd to channel 1 for lambdoma-style behavior)
-- Expose raw oscillator output on analog outs for constant-amplitude harmonic scanning
-- Move GUI controls toward CV control inputs across available analog channels
-- Continue pushing "alive"/physical-modeling response and performative compensation behavior
-  (for example stronger drive expectation on low/subharmonic resonators)
-
-## Notes
-
-- Keep per-frame allocations out of `render()` to preserve realtime stability.
-- If CPU climbs, first inspect node loop work and coupling loop complexity.
+Or Cursor: **Run Task → Bela: Deploy**

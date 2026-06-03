@@ -6,6 +6,7 @@
 #include <Bela.h>
 #include <libraries/Gui/Gui.h>
 #include <libraries/GuiController/GuiController.h>
+#include <unistd.h>
 #endif
 #include <stdlib.h>
 #include <math.h>
@@ -18,26 +19,52 @@
 #define NUM_OSCS 15
 #define NUM_CHANNELS 2
 #define NUM_OUTPUT_NODES 15
+#define SPEC_A 0
+#define SPEC_B 1
+
+// Digital SYNC (gate/trigger jacks)
+#define SYNC_DIGITAL_A 0
+#define SYNC_DIGITAL_B 1
+
+// Main audio I/O (ch 0/1): all-in / all-out for now.
+// Dedicated scan jacks + analog CV outs (ch 2+) when scan path is wired up.
 
 Gui gui;
 GuiController controller;
 unsigned int gF0SliderIdx;
+unsigned int gDetuneSliderIdx;
+unsigned int gGlobalPhaseSliderIdx;
 unsigned int gKSpreadSliderIdx;
-unsigned int gInputRotateASliderIdx;
-unsigned int gInputRotateBSliderIdx;
-unsigned int gOutputRotateASliderIdx;
-unsigned int gOutputRotateBSliderIdx;
+unsigned int gInputScanASliderIdx;
+unsigned int gInputScanBSliderIdx;
+unsigned int gOutputScanASliderIdx;
+unsigned int gOutputScanBSliderIdx;
+unsigned int gSpecAToBSliderIdx;
+unsigned int gSpecBToASliderIdx;
 unsigned int gNodeAttackSliderIdx;
 unsigned int gNodeDecaySliderIdx;
+unsigned int gInPeakASliderIdx;
+unsigned int gInPeakBSliderIdx;
+unsigned int gOutPeakASliderIdx;
+unsigned int gOutPeakBSliderIdx;
 
-float amplitude = 0.4f;
+float gInPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
+float gOutPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
+const float kPeakDecay = 0.99985f;
 
-float omega[NUM_OSCS];
+float amplitude = 4.0f;
+
+float omega[NUM_CHANNELS][NUM_OSCS];
 float theta[NUM_CHANNELS][NUM_OSCS];
 float excitationScale[NUM_OSCS];
 float injectionBoost[NUM_OSCS];
+float loudnessWeight[NUM_OSCS];
 
-float gPrevF0 = 55.0f;
+float gPrevF0Center = 55.0f;
+float gPrevDetune = 0.0f;
+float gFeedbackBus[NUM_CHANNELS] = {0.0f, 0.0f};
+float gFeedbackBusPrev[NUM_CHANNELS] = {0.0f, 0.0f};
+int gSyncPrev[NUM_CHANNELS] = {0, 0};
 
 struct Biquad {
     float b0, b1, b2, a1, a2;
@@ -55,31 +82,30 @@ float nodeBrightness[NUM_OSCS];
 float gChannelEnergy[NUM_CHANNELS] = {0.0f, 0.0f};
 const float gEnergyReserve = 0.45f;
 
-// frequency-ordered: subharmonics ascending, f0, harmonics ascending
-// node: 0      1      2      3      4      5      6      7    8    9    10   11   12   13   14
-// mult: 1/8   1/7    1/6    1/5    1/4    1/3    1/2    1    2    3    4    5    6    7    8
+// Slow correlated drift: 3 LFOs per spectrum (sub / fundamental / harmonic families)
+float gDriftPhase[NUM_CHANNELS][3];
+const float kDriftLfoHz[3] = {0.037f, 0.059f, 0.043f};
+const float kDriftFamilyDepth = 0.0016f;
+const float kDriftNodeDepth = 0.00035f;
+
+// Coupling memory: smoothed cross-node drive (one-pole per node)
+float gCouplingDrive[NUM_CHANNELS][NUM_OSCS];
+const float kCouplingMemCoeff = 0.997f;
+
 const float mult[NUM_OSCS] = {
-    1.0f/8.0f,
-    1.0f/7.0f,
-    1.0f/6.0f,
-    1.0f/5.0f,
-    1.0f/4.0f,
-    1.0f/3.0f,
-    1.0f/2.0f,
-    1.0f,
-    2.0f,
-    3.0f,
-    4.0f,
-    5.0f,
-    6.0f,
-    7.0f,
-    8.0f,
+    1.0f/8.0f, 1.0f/7.0f, 1.0f/6.0f, 1.0f/5.0f, 1.0f/4.0f,
+    1.0f/3.0f, 1.0f/2.0f, 1.0f,
+    2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f,
 };
 
-// output scanner: all 15 nodes
 const int outputNodes[NUM_OUTPUT_NODES] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
 };
+
+inline int analogFrameForAudio(BelaContext *context, int audioFrame) {
+    if(context->analogFrames == 0) return 0;
+    return (audioFrame * (int)context->analogFrames) / (int)context->audioFrames;
+}
 
 float getFrequency(int i, float f0) {
     return f0 * mult[i];
@@ -91,22 +117,16 @@ int igcd(int a, int b) {
 }
 
 void buildCouplingWeights() {
-    // asymmetric coupling: couplingWeights[i][j] = how strongly j drives i
-    // ratio = mult[j]/mult[i] expressed as num_r/den_r in lowest terms
-    // default law favors simple ratios with a soft cap to avoid 1.0 plateaus.
-    // define KOSC_LEGACY_COUPLING to restore the original 1/num_r behavior.
     for(int i = 0; i < NUM_OSCS; i++) {
         couplingWeightSum[i] = 0.0f;
         for(int j = 0; j < NUM_OSCS; j++) {
             if(i == j) { couplingWeights[i][j] = 0.0f; continue; }
 
-            // express mult[j]/mult[i] as integer fraction
-            int pj = (mult[j] >= 1.0f) ? (int)roundf(mult[j])         : 1;
-            int qj = (mult[j] >= 1.0f) ? 1                             : (int)roundf(1.0f/mult[j]);
-            int pi = (mult[i] >= 1.0f) ? (int)roundf(mult[i])         : 1;
-            int qi = (mult[i] >= 1.0f) ? 1                             : (int)roundf(1.0f/mult[i]);
+            int pj = (mult[j] >= 1.0f) ? (int)roundf(mult[j]) : 1;
+            int qj = (mult[j] >= 1.0f) ? 1 : (int)roundf(1.0f/mult[j]);
+            int pi = (mult[i] >= 1.0f) ? (int)roundf(mult[i]) : 1;
+            int qi = (mult[i] >= 1.0f) ? 1 : (int)roundf(1.0f/mult[i]);
 
-            // ratio mult[j]/mult[i] = (pj/qj)/(pi/qi) = (pj*qi)/(qj*pi)
             int num = pj * qi;
             int den = qj * pi;
             int g   = igcd(num, den);
@@ -116,8 +136,6 @@ void buildCouplingWeights() {
 #ifdef KOSC_LEGACY_COUPLING
             float w = 1.0f / (float)num_r;
 #else
-            // Penalize both numerator and denominator complexity, then apply
-            // directional bias: lower->higher tends to drive more than higher->lower.
             float complexity = (float)num_r + 0.35f * (float)(den_r - 1);
             float base = 1.0f / complexity;
             float asymmetry = (mult[j] < mult[i]) ? 1.15f : 0.8f;
@@ -130,19 +148,20 @@ void buildCouplingWeights() {
 }
 
 void buildExcitationScale() {
+    float weightSum = 0.0f;
     for(int i = 0; i < NUM_OSCS; i++) {
-        // excitationScale: reduces biquad input for subharmonics (harder to excite)
-        excitationScale[i] = fminf(mult[i], 1.0f); // 0.125..1.0
-
-        // injectionBoost: compensates by boosting injection at subharmonic nodes
-        // sqrt compression keeps range reasonable: f0/8->2.83x, f0/2->1.41x
-        // harmonics get 1.0 (no boost, no reduction)
+        excitationScale[i] = fminf(mult[i], 1.0f);
         float boost = sqrtf(fmaxf(1.0f / mult[i], 1.0f));
         injectionBoost[i] = boost;
-
-        // 0.0 at subharmonic floor (f0/8), 1.0 at harmonic ceiling (8*f0)
         nodeBrightness[i] = fminf(fmaxf(log2f(mult[i] * 8.0f) / 6.0f, 0.0f), 1.0f);
+
+        float fNorm = fmaxf(mult[i], 1.0f / 8.0f);
+        loudnessWeight[i] = powf(fNorm, -0.22f);
+        weightSum += loudnessWeight[i];
     }
+    if(weightSum > 1e-9f)
+        for(int i = 0; i < NUM_OSCS; i++)
+            loudnessWeight[i] /= weightSum;
 }
 
 void updateBiquadBP(Biquad &f, float freq, float Q, float sampleRate) {
@@ -165,177 +184,251 @@ inline float processBiquad(Biquad &f, float in) {
     return out;
 }
 
-void updateFrequencies(BelaContext *context, float f0) {
+void updateFrequencies(BelaContext *context, int ch, float f0Spectrum) {
     for(int i = 0; i < NUM_OSCS; i++) {
-        float baseFreq     = getFrequency(i, f0);
+        float baseFreq     = getFrequency(i, f0Spectrum);
         float neighborFreq = (i < NUM_OSCS - 1) ?
-            getFrequency(i + 1, f0) : getFrequency(i - 1, f0);
+            getFrequency(i + 1, f0Spectrum) : getFrequency(i - 1, f0Spectrum);
         float spacing = fabsf(neighborFreq - baseFreq);
         float freq    = (baseFreq == 0.0f) ? 0.001f : baseFreq;
         float absFreq = fabsf(freq);
-        omega[i] = 2.0f * M_PI * freq / context->audioSampleRate;
+        omega[ch][i] = 2.0f * M_PI * freq / context->audioSampleRate;
         float Q = absFreq / fmaxf(spacing, 1.0f) * nodeBandwidth;
         Q = fmaxf(0.5f, fminf(Q, 50.0f));
-        for(int ch = 0; ch < NUM_CHANNELS; ch++)
-            updateBiquadBP(bpFilters[ch][i], absFreq, Q, context->audioSampleRate);
+        updateBiquadBP(bpFilters[ch][i], absFreq, Q, context->audioSampleRate);
     }
 }
 
-void initOscillators(BelaContext *context, float f0) {
-    updateFrequencies(context, f0);
-    for(int ch = 0; ch < NUM_CHANNELS; ch++)
+inline int driftFamilyForNode(int i) {
+    if(i < 7) return 0;
+    if(i == 7) return 1;
+    return 2;
+}
+
+float nodeDriftAmount(int ch, int i) {
+    int fam = driftFamilyForNode(i);
+    float family = sinf_neon(gDriftPhase[ch][fam]) * kDriftFamilyDepth;
+    float node = sinf_neon(gDriftPhase[ch][fam] * 1.31f + (float)i * 0.89f) * kDriftNodeDepth;
+    return family + node;
+}
+
+void advanceDriftLfo(BelaContext *context, int ch) {
+    float inc = 2.0f * M_PI / (float)context->audioSampleRate;
+    for(int f = 0; f < 3; f++)
+        gDriftPhase[ch][f] += inc * kDriftLfoHz[f];
+}
+
+void resetSpectrumPhase(int ch) {
+    for(int i = 0; i < NUM_OSCS; i++) {
+        theta[ch][i] = 0.0f;
+        gCouplingDrive[ch][i] = 0.0f;
+    }
+    gFeedbackBus[ch] = 0.0f;
+    gFeedbackBusPrev[ch] = 0.0f;
+}
+
+void initOscillators(BelaContext *context, float f0Center, float detune) {
+    float f0A = f0Center * (1.0f - detune);
+    float f0B = f0Center * (1.0f + detune);
+    updateFrequencies(context, SPEC_A, f0A);
+    updateFrequencies(context, SPEC_B, f0B);
+    for(int ch = 0; ch < NUM_CHANNELS; ch++) {
+        for(int f = 0; f < 3; f++)
+            gDriftPhase[ch][f] = 0.0f;
         for(int i = 0; i < NUM_OSCS; i++) {
-            theta[ch][i] = ((float)rand() / (float)RAND_MAX) * 2.0f * M_PI - M_PI;
+            theta[ch][i] = 0.0f;
             nodeEnvelope[ch][i] = 0.0f;
+            gCouplingDrive[ch][i] = 0.0f;
         }
+    }
+}
+
+void computeInputScan(float scanPos, int &node, int &nodeNext, float &gain, float &gainNext) {
+    float pos       = scanPos * NUM_OSCS;
+    int   n         = (int)pos % NUM_OSCS;
+    float frac      = pos - (int)pos;
+    node            = n;
+    nodeNext        = (n + 1) % NUM_OSCS;
+    gain            = cosf_neon(frac * M_PI / 2.0f);
+    gainNext        = sinf_neon(frac * M_PI / 2.0f);
+}
+
+void computeOutputScan(float scanPos, int &outNode, int &outNodeNext,
+                       float &gain, float &gainNext) {
+    float pos       = scanPos * NUM_OUTPUT_NODES;
+    int   idx       = (int)pos % NUM_OUTPUT_NODES;
+    float frac      = pos - (int)pos;
+    outNode         = outputNodes[idx];
+    outNodeNext     = outputNodes[(idx + 1) % NUM_OUTPUT_NODES];
+    gain            = cosf_neon(frac * M_PI / 2.0f);
+    gainNext        = sinf_neon(frac * M_PI / 2.0f);
+}
+
+// Raw sine bus for cross-spectrum feedback (no envelope — loop can self-sustain)
+float sumRawSpectrum(int ch, float globalPhase) {
+    float s = 0.0f;
+    for(int i = 0; i < NUM_OSCS; i++)
+        s += sinf_neon(theta[ch][i] + globalPhase) * loudnessWeight[i];
+    return s;
+}
+
+// Lower-priority task: GUI setSliderValue is not RT-safe — never call from render().
+void meterGuiTask(void *) {
+    static const unsigned int kNumMeters = 4;
+    float sent[kNumMeters] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const unsigned int meterIdx[kNumMeters] = {
+        gInPeakASliderIdx, gInPeakBSliderIdx,
+        gOutPeakASliderIdx, gOutPeakBSliderIdx
+    };
+    const float kSendThreshold = 0.05f;
+
+    while(!Bela_stopRequested()) {
+        const float *levels[kNumMeters] = {
+            &gInPeakHold[0], &gInPeakHold[1],
+            &gOutPeakHold[0], &gOutPeakHold[1]
+        };
+        for(unsigned int m = 0; m < kNumMeters; m++) {
+            float level = *levels[m];
+            if(fabsf(level - sent[m]) < kSendThreshold && level < 0.95f)
+                continue;
+            controller.setSliderValue(meterIdx[m], level);
+            sent[m] = level;
+        }
+#ifdef __INTELLISENSE__
+        for(volatile int d = 0; d < 80000; ++d) {}
+#else
+        usleep(80000);
+#endif
+    }
 }
 
 bool setup(BelaContext *context, void *userData) {
     buildCouplingWeights();
     buildExcitationScale();
 
-    rt_printf("Injection boosts:\n");
-    for(int i = 0; i < NUM_OSCS; i++)
-        rt_printf("  node %d (mult %.3f): excite=%.3f boost=%.3f net=%.3f\n",
-            i, mult[i], excitationScale[i], injectionBoost[i],
-            excitationScale[i] * injectionBoost[i]);
-
-    rt_printf("couplingWeightSum[7] = %.3f\n", couplingWeightSum[7]);
-    rt_printf("coupling weight f0/4->f0: %.3f\n", couplingWeights[7][4]);
-
-    rt_printf("Coupling weight matrix:\n");
-    for(int i = 0; i < NUM_OSCS; i++) {
-        for(int j = 0; j < NUM_OSCS; j++)
-            rt_printf("%.2f ", couplingWeights[i][j]);
-        rt_printf("\n");
-    }
-
     gui.setup(context->projectName);
     controller.setup(&gui, "Harmonic Resonator");
 
-    gF0SliderIdx            = controller.addSlider("F0 (Hz)",           55.0,     0.0, 1024.0,  0.1);
-    gKSpreadSliderIdx       = controller.addSlider("Spread",             0.5,     0.0,    2.0,  0.001);
-    gInputRotateASliderIdx  = controller.addSlider("Input A Rotation",   0.5,     0.0,    1.0,  0.001);
-    gInputRotateBSliderIdx  = controller.addSlider("Input B Rotation",   0.5,     0.0,    1.0,  0.001);
-    gOutputRotateASliderIdx = controller.addSlider("Output A Rotation",  0.5,     0.0,    1.0,  0.001);
-    gOutputRotateBSliderIdx = controller.addSlider("Output B Rotation",  0.5,     0.0,    1.0,  0.001);
-    gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",    0.99,    0.9,  0.9999, 0.0001);
-    gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",     0.9995,  0.9,  0.9999, 0.0001);
+    gF0SliderIdx            = controller.addSlider("F0 (Hz)",            55.0,    0.0, 1024.0, 0.1);
+    gDetuneSliderIdx        = controller.addSlider("Detune",              0.0,    0.0,    0.05, 0.0001);
+    gGlobalPhaseSliderIdx   = controller.addSlider("Osc Phase",           0.0,    0.0,  6.2832, 0.001);
+    gKSpreadSliderIdx       = controller.addSlider("Spread",              0.5,    0.0,    2.0, 0.001);
+    gInputScanASliderIdx    = controller.addSlider("Input A Scan",        0.5,    0.0,    1.0, 0.001);
+    gInputScanBSliderIdx    = controller.addSlider("Input B Scan",        0.5,    0.0,    1.0, 0.001);
+    gOutputScanASliderIdx   = controller.addSlider("Output A Scan",       0.5,    0.0,    1.0, 0.001);
+    gOutputScanBSliderIdx   = controller.addSlider("Output B Scan",       0.5,    0.0,    1.0, 0.001);
+    gSpecAToBSliderIdx      = controller.addSlider("A bus -> B in",       0.0,    0.0,    2.0, 0.001);
+    gSpecBToASliderIdx      = controller.addSlider("B bus -> A in",       0.0,    0.0,    2.0, 0.001);
+    gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",     0.99,    0.9, 0.9999, 0.0001);
+    gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",      0.9995,  0.9, 0.9999, 0.0001);
+    gInPeakASliderIdx       = controller.addSlider("In A Peak (1=clip)",  0.0,     0.0, 1.2, 0.001);
+    gInPeakBSliderIdx       = controller.addSlider("In B Peak (1=clip)",  0.0,     0.0, 1.2, 0.001);
+    gOutPeakASliderIdx      = controller.addSlider("Out A Peak (1=clip)", 0.0,     0.0, 1.2, 0.001);
+    gOutPeakBSliderIdx      = controller.addSlider("Out B Peak (1=clip)", 0.0,     0.0, 1.2, 0.001);
 
-    srand(42);
-    initOscillators(context, 55.0f);
+    // Digital I/O setup
+    pinMode(context, 0, SYNC_DIGITAL_A, INPUT);
+    pinMode(context, 0, SYNC_DIGITAL_B, INPUT);
+
+    AuxiliaryTask meterTask = Bela_createAuxiliaryTask(meterGuiTask, 0, "meter-gui", NULL);
+    Bela_scheduleAuxiliaryTask(meterTask);
+
+    initOscillators(context, 55.0f, 0.0f);
+    gPrevF0Center = 55.0f;
+    gPrevDetune = 0.0f;
     return true;
 }
 
 void render(BelaContext *context, void *userData) {
-    float f0            = controller.getSliderValue(gF0SliderIdx);
+    float f0Center      = controller.getSliderValue(gF0SliderIdx);
+    float detune        = controller.getSliderValue(gDetuneSliderIdx);
+    float globalPhase   = controller.getSliderValue(gGlobalPhaseSliderIdx);
     float KSpread       = controller.getSliderValue(gKSpreadSliderIdx);
-    float inputRotateA  = controller.getSliderValue(gInputRotateASliderIdx);
-    float inputRotateB  = controller.getSliderValue(gInputRotateBSliderIdx);
-    float outputRotateA = controller.getSliderValue(gOutputRotateASliderIdx);
-    float outputRotateB = controller.getSliderValue(gOutputRotateBSliderIdx);
+    float inputScanA    = controller.getSliderValue(gInputScanASliderIdx);
+    float inputScanB    = controller.getSliderValue(gInputScanBSliderIdx);
+    float outputScanA   = controller.getSliderValue(gOutputScanASliderIdx);
+    float outputScanB   = controller.getSliderValue(gOutputScanBSliderIdx);
+    float specAToB      = controller.getSliderValue(gSpecAToBSliderIdx);
+    float specBToA      = controller.getSliderValue(gSpecBToASliderIdx);
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
     float energyReserve = gEnergyReserve;
 
-    // Avoid filter coefficient churn from tiny slider jitter.
-    if(fabsf(f0 - gPrevF0) > 1e-6f) {
-        updateFrequencies(context, f0);
-        gPrevF0 = f0;
+    float f0A = f0Center * (1.0f - detune);
+    float f0B = f0Center * (1.0f + detune);
+    const bool phaseLocked = (detune < 1e-5f);
+
+    if(fabsf(f0Center - gPrevF0Center) > 1e-6f || fabsf(detune - gPrevDetune) > 1e-6f) {
+        updateFrequencies(context, SPEC_A, f0A);
+        updateFrequencies(context, SPEC_B, f0B);
+        gPrevF0Center = f0Center;
+        gPrevDetune = detune;
     }
 
-    // input scanner A — ring 0, all 15 nodes, frequency ordered
-    float inPosA       = inputRotateA * NUM_OSCS;
-    int   inNodeA      = (int)inPosA % NUM_OSCS;
-    float inFracA      = inPosA - (int)inPosA;
-    float inGainA      = cosf_neon(inFracA * M_PI / 2.0f);
-    float inGainA_next = sinf_neon(inFracA * M_PI / 2.0f);
-    int   inNodeA_next = (inNodeA + 1) % NUM_OSCS;
+    (void)inputScanA;
+    (void)inputScanB;
 
-    // input scanner B — ring 1, all 15 nodes, frequency ordered
-    float inPosB       = inputRotateB * NUM_OSCS;
-    int   inNodeB      = (int)inPosB % NUM_OSCS;
-    float inFracB      = inPosB - (int)inPosB;
-    float inGainB      = cosf_neon(inFracB * M_PI / 2.0f);
-    float inGainB_next = sinf_neon(inFracB * M_PI / 2.0f);
-    int   inNodeB_next = (inNodeB + 1) % NUM_OSCS;
+    int outNodeA, outNodeA_next, outNodeB, outNodeB_next;
+    float gainNodeA, gainNextA, gainNodeB, gainNextB;
+    computeOutputScan(outputScanA, outNodeA, outNodeA_next, gainNodeA, gainNextA);
+    computeOutputScan(outputScanB, outNodeB, outNodeB_next, gainNodeB, gainNextB);
 
-    // output scanner A — ring 0, all 15 nodes
-    float outPosA       = outputRotateA * NUM_OUTPUT_NODES;
-    int   outIdxA       = (int)outPosA % NUM_OUTPUT_NODES;
-    float outFracA      = outPosA - (int)outPosA;
-    int   outNodeA      = outputNodes[outIdxA];
-    int   outNodeA_next = outputNodes[(outIdxA + 1) % NUM_OUTPUT_NODES];
-    float gainNodeA     = cosf_neon(outFracA * M_PI / 2.0f);
-    float gainNextA     = sinf_neon(outFracA * M_PI / 2.0f);
-
-    // output scanner B — ring 1, all 15 nodes
-    float outPosB       = outputRotateB * NUM_OUTPUT_NODES;
-    int   outIdxB       = (int)outPosB % NUM_OUTPUT_NODES;
-    float outFracB      = outPosB - (int)outPosB;
-    int   outNodeB      = outputNodes[outIdxB];
-    int   outNodeB_next = outputNodes[(outIdxB + 1) % NUM_OUTPUT_NODES];
-    float gainNodeB     = cosf_neon(outFracB * M_PI / 2.0f);
-    float gainNextB     = sinf_neon(outFracB * M_PI / 2.0f);
-
-    const int   inNode[NUM_CHANNELS]      = { inNodeA,      inNodeB      };
-    const int   inNodeNext[NUM_CHANNELS]  = { inNodeA_next, inNodeB_next };
-    const float inGain[NUM_CHANNELS]      = { inGainA,      inGainB      };
-    const float inGainNext[NUM_CHANNELS]  = { inGainA_next, inGainB_next };
+    for(unsigned int n = 0; n < context->digitalFrames; n++) {
+        int syncA = digitalRead(context, n, SYNC_DIGITAL_A);
+        int syncB = digitalRead(context, n, SYNC_DIGITAL_B);
+        if(syncA && !gSyncPrev[SPEC_A]) resetSpectrumPhase(SPEC_A);
+        if(syncB && !gSyncPrev[SPEC_B]) resetSpectrumPhase(SPEC_B);
+        gSyncPrev[SPEC_A] = syncA ? 1 : 0;
+        gSyncPrev[SPEC_B] = syncB ? 1 : 0;
+    }
 
     for(int frame = 0; frame < context->audioFrames; frame++) {
-
-        float input[NUM_CHANNELS];
-        for(int ch = 0; ch < NUM_CHANNELS; ch++) {
-            input[ch] = audioRead(context, frame, ch);
-        }
 
         float oscOut[NUM_CHANNELS][NUM_OSCS];
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
-            // per-node: bandpass, envelope, phase accumulation
-            for(int i = 0; i < NUM_OSCS; i++) {
-                // Injection scanner only addresses two adjacent nodes.
-                float inj = 0.0f;
-                if(i == inNode[ch])     inj += inGain[ch];
-                if(i == inNodeNext[ch]) inj += inGainNext[ch];
-                inj = fminf(inj, 1.0f);
+            float allIn = audioRead(context, frame, ch);
+            float inAbs = fabsf(allIn);
+            gInPeakHold[ch] = fmaxf(inAbs, gInPeakHold[ch] * kPeakDecay);
+            if(ch == SPEC_A)
+                allIn += gFeedbackBusPrev[SPEC_B] * specBToA;
+            else
+                allIn += gFeedbackBus[SPEC_A] * specAToB;
 
-                // excitationScale reduces subharmonic injection (harder to excite)
-                // injectionBoost compensates so subharmonics still respond
-                // net effect: sqrt(mult[i]) — compressed asymmetry
+            advanceDriftLfo(context, ch);
+
+            for(int i = 0; i < NUM_OSCS; i++) {
                 float bandSig = processBiquad(bpFilters[ch][i],
-                    input[ch] * inj
-                    * excitationScale[i] * injectionBoost[i]);
+                    allIn * excitationScale[i] * injectionBoost[i]);
                 float target  = fabsf(bandSig);
 
-                // Frequency-dependent damping:
-                // - darker/lower nodes ring longer
-                // - brighter/higher nodes lose energy faster
-                // The global slider still defines the base decay feel.
                 const float maxDecayCeil = 0.9999f;
                 const float minDecayFloor = 0.97f;
-                const float lowRingBias = 0.25f;
+                const float lowBias = 0.25f;
                 const float highDampBias = 0.35f;
                 float b = nodeBrightness[i];
-                float slowerDecay = nodeDecay + (maxDecayCeil - nodeDecay) * lowRingBias * (1.0f - b);
+                float slowerDecay = nodeDecay + (maxDecayCeil - nodeDecay) * lowBias * (1.0f - b);
                 float effectiveDecay = slowerDecay - (slowerDecay - minDecayFloor) * highDampBias * b;
 
                 if(target > nodeEnvelope[ch][i])
                     nodeEnvelope[ch][i] = nodeAttack * nodeEnvelope[ch][i]
                                         + (1.0f - nodeAttack) * target;
                 else
-                    nodeEnvelope[ch][i] = effectiveDecay  * nodeEnvelope[ch][i]
-                                        + (1.0f - effectiveDecay)  * target;
+                    nodeEnvelope[ch][i] = effectiveDecay * nodeEnvelope[ch][i]
+                                        + (1.0f - effectiveDecay) * target;
 
-                theta[ch][i] += omega[i];
-                if(theta[ch][i] >  M_PI) theta[ch][i] -= 2.0f * M_PI;
-                if(theta[ch][i] < -M_PI) theta[ch][i] += 2.0f * M_PI;
+                float drift = nodeDriftAmount(ch, i);
+                if(!phaseLocked || ch == SPEC_A) {
+                    theta[ch][i] += omega[ch][i] * (1.0f + drift);
+                    if(theta[ch][i] >  M_PI) theta[ch][i] -= 2.0f * M_PI;
+                    if(theta[ch][i] < -M_PI) theta[ch][i] += 2.0f * M_PI;
+                } else {
+                    theta[ch][i] = theta[SPEC_A][i];
+                }
 
-                oscOut[ch][i] = sinf_neon(theta[ch][i]) * nodeEnvelope[ch][i];
+                oscOut[ch][i] = sinf_neon(theta[ch][i] + globalPhase) * nodeEnvelope[ch][i];
             }
 
-            // asymmetric harmonic diffusion — max-based, no normalization dilution
             float prevEnv[NUM_OSCS];
             for(int i = 0; i < NUM_OSCS; i++) prevEnv[i] = nodeEnvelope[ch][i];
 
@@ -345,23 +438,21 @@ void render(BelaContext *context, void *userData) {
                     float contrib = prevEnv[j] * couplingWeights[i][j];
                     if(contrib > maxContrib) maxContrib = contrib;
                 }
+                gCouplingDrive[ch][i] = kCouplingMemCoeff * gCouplingDrive[ch][i]
+                                      + (1.0f - kCouplingMemCoeff) * maxContrib;
                 nodeEnvelope[ch][i] = fminf(
-                    fmaxf(nodeEnvelope[ch][i], maxContrib * KSpread),
+                    fmaxf(nodeEnvelope[ch][i], gCouplingDrive[ch][i] * KSpread),
                     1.05f
                 );
             }
 
-            // Limited energy store per channel:
-            // external input replenishes energy, while active resonance spends it.
-            float inputAbs = fabsf(input[ch]);
-            // Nonlinear mapping for stronger audible range from the same 0..1 control.
+            float inputAbs = fabsf(allIn);
             float reserveCurve = energyReserve * energyReserve;
             float activeBudgetScale = 0.2f + 1.8f * reserveCurve;
             float replenishScale = 0.0003f + 0.02f * reserveCurve;
             float leakScale = 0.004f * (1.0f - reserveCurve) + 0.00008f;
 
-            float replenish = replenishScale * inputAbs;
-            gChannelEnergy[ch] = fminf(gChannelEnergy[ch] + replenish, 2.2f);
+            gChannelEnergy[ch] = fminf(gChannelEnergy[ch] + replenishScale * inputAbs, 2.2f);
 
             float sumSq = 0.0f;
             for(int i = 0; i < NUM_OSCS; i++)
@@ -376,19 +467,27 @@ void render(BelaContext *context, void *userData) {
                     nodeEnvelope[ch][i] *= scale;
             }
 
-            float spreadSpend = 0.0012f + 0.0055f * KSpread;
-            float spend = meanSq * spreadSpend;
-            float leak  = leakScale;
-            gChannelEnergy[ch] = fmaxf(gChannelEnergy[ch] - spend - leak, 0.0f);
+            float spend = meanSq * (0.0012f + 0.0055f * KSpread);
+            gChannelEnergy[ch] = fmaxf(gChannelEnergy[ch] - spend - leakScale, 0.0f);
+
+            gFeedbackBus[ch] = sumRawSpectrum(ch, globalPhase);
         }
 
-        float outA = oscOut[0][outNodeA] * gainNodeA
-                   + oscOut[0][outNodeA_next] * gainNextA;
-        float outB = oscOut[1][outNodeB] * gainNodeB
-                   + oscOut[1][outNodeB_next] * gainNextB;
+        float scanOutA = oscOut[SPEC_A][outNodeA] * gainNodeA
+                       + oscOut[SPEC_A][outNodeA_next] * gainNextA;
+        float scanOutB = oscOut[SPEC_B][outNodeB] * gainNodeB
+                       + oscOut[SPEC_B][outNodeB_next] * gainNextB;
 
-        audioWrite(context, frame, 0, outA * amplitude);
-        audioWrite(context, frame, 1, outB * amplitude);
+        float outA = scanOutA * amplitude;
+        float outB = scanOutB * amplitude;
+        gOutPeakHold[0] = fmaxf(fabsf(outA), gOutPeakHold[0] * kPeakDecay);
+        gOutPeakHold[1] = fmaxf(fabsf(outB), gOutPeakHold[1] * kPeakDecay);
+
+        audioWrite(context, frame, 0, outA);
+        audioWrite(context, frame, 1, outB);
+
+        gFeedbackBusPrev[SPEC_A] = gFeedbackBus[SPEC_A];
+        gFeedbackBusPrev[SPEC_B] = gFeedbackBus[SPEC_B];
     }
 }
 
