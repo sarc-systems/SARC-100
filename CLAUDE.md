@@ -30,7 +30,7 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 1. **All-in** — audio inputs drive every node of each ladder uniformly
 2. **Node coupling** — each node receives a weighted sum of neighbor `oscOut` values from the previous sample (one-tick delay avoids ordering dependency); weights from `couplingWeights[i][j]` matrix based on harmonic ratio simplicity
 3. **Bandpass + envelope** — per-node bandpass filter centered at node frequency; envelope follower on bandpass output; sine oscillator amplitude = envelope value
-4. **Ladder coupling** — cross-ladder envelope diffusion weighted by harmonic ratios, smoothed via `kCouplingMemCoeff = 0.997f`; currently uses `max` operation — **TODO: change to sum to match intra-ladder coupling**
+4. **Ladder coupling** — cross-ladder envelope diffusion weighted by harmonic ratios, smoothed via `kCouplingMemCoeff = 0.997f`; uses sum (additive, same as intra-ladder coupling)
 5. **Energy budget** — per-channel `gEnergyReserve` (0–1) constrains total envelope energy; replenishes from input signal, spends proportional to coupling activity; prevents runaway
 6. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking
 7. **Scan out** — equal-power crossfade between adjacent nodes; scan position from CV + GUI
@@ -114,9 +114,8 @@ float gEnergyReserve = 0.45f;          // energy budget setpoint
 
 ## Known issues / active TODOs
 
-- **Ladder coupling uses `max` not `sum`** — intra-ladder coupling was changed to sum (physically correct, supports interference); ladder coupling still uses max (winner-take-all). Change to sum for consistency and chimera-supporting behavior.
-- **Controls update** - separate node coupling A/B and directional cross-coupling A→B/B→A are now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **No allpass in ladder coupling path** — intra-ladder node coupling has allpass phase lag (via VCFQ-style patching in hardware); ladder A↔B coupling path has no phase lag. Add ~π/2 allpass for chimera-supporting inter-ladder behavior.
+- **Controls update** - separate node coupling A/B and directional cross-coupling A→B/B→A are now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **Global phase not on panel** — currently GUI slider only; useful for fine-tuning tone. Reserve an analog input on IO expander.
 
 [later - these will appear on an I/O expansion module]:

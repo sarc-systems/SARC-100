@@ -485,18 +485,16 @@ void render(BelaContext *context, void *userData) {
             const int other = 1 - ch;
             float xCoupling = (ch == SPEC_A) ? xCouplingBA : xCouplingAB;
             for(int i = 0; i < NUM_OSCS; i++) {
-                float ladderMax = preEnv[other][i];
+                float ladderSum = preEnv[other][i];
                 for(int j = 0; j < NUM_OSCS; j++) {
                     float w = couplingWeights[i][j];
                     if(w == 0.0f) continue;
-                    float cross = preEnv[other][j] * w;
-                    if(cross > ladderMax) ladderMax = cross;
+                    ladderSum += preEnv[other][j] * w;
                 }
                 gLadderCouplingDrive[ch][i] = kCouplingMemCoeff * gLadderCouplingDrive[ch][i]
-                                            + (1.0f - kCouplingMemCoeff) * ladderMax;
+                                            + (1.0f - kCouplingMemCoeff) * ladderSum;
                 nodeEnvelope[ch][i] = fminf(
-                    fmaxf(nodeEnvelope[ch][i],
-                          gLadderCouplingDrive[ch][i] * xCoupling),
+                    nodeEnvelope[ch][i] + gLadderCouplingDrive[ch][i] * xCoupling,
                     1.05f
                 );
             }
