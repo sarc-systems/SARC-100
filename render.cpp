@@ -33,8 +33,10 @@ GuiController controller;
 unsigned int gF0SliderIdx;
 unsigned int gDetuneSliderIdx;
 unsigned int gGlobalPhaseSliderIdx;
-unsigned int gNodeCouplingSliderIdx;
-unsigned int gLadderCouplingSliderIdx;
+unsigned int gNodeCouplingASliderIdx;
+unsigned int gNodeCouplingBSliderIdx;
+unsigned int gXCouplingABSliderIdx;
+unsigned int gXCouplingBASliderIdx;
 unsigned int gInputScanASliderIdx;
 unsigned int gInputScanBSliderIdx;
 unsigned int gOutputScanASliderIdx;
@@ -344,8 +346,10 @@ bool setup(BelaContext *context, void *userData) {
     gF0SliderIdx            = controller.addSlider("F0 (Hz)",            55.0,    0.0, 1024.0, 0.1);
     gDetuneSliderIdx        = controller.addSlider("Detune",            0.18,     0.0,    1.0, 0.001);
     gGlobalPhaseSliderIdx   = controller.addSlider("Osc Phase",           0.0,    0.0,  6.2832, 0.001);
-    gNodeCouplingSliderIdx   = controller.addSlider("Node Coupling",       0.1,    0.0,    2.0, 0.001);
-    gLadderCouplingSliderIdx = controller.addSlider("Ladder Coupling",     0.0,    0.0,    1.0, 0.001);
+    gNodeCouplingASliderIdx  = controller.addSlider("Node Coupling A",     0.1,    0.0,    2.0, 0.001);
+    gNodeCouplingBSliderIdx  = controller.addSlider("Node Coupling B",     0.1,    0.0,    2.0, 0.001);
+    gXCouplingABSliderIdx    = controller.addSlider("X-Couple A->B",       0.0,    0.0,    1.0, 0.001);
+    gXCouplingBASliderIdx    = controller.addSlider("X-Couple B->A",       0.0,    0.0,    1.0, 0.001);
     gInputScanASliderIdx    = controller.addSlider("Input A Scan",        0.5,    0.0,    1.0, 0.001);
     gInputScanBSliderIdx    = controller.addSlider("Input B Scan",        0.5,    0.0,    1.0, 0.001);
     gOutputScanASliderIdx   = controller.addSlider("Output A Scan",       0.5,    0.0,    1.0, 0.001);
@@ -370,24 +374,38 @@ bool setup(BelaContext *context, void *userData) {
 }
 
 void render(BelaContext *context, void *userData) {
-    // Read tune CV once per block — filter coefficient updates are expensive,
-    // so block-rate F0 resolution is intentional (unlike scan CVs which are per-frame).
-    float cvF0 = 0.0f;
-    if(context->analogFrames > 0)
-        cvF0 = analogRead(context, 0, 2);
-    float f0Center = clampF0Hz(controller.getSliderValue(gF0SliderIdx) + cvF0 * kF0Max);
-    float detuneRaw       = controller.getSliderValue(gDetuneSliderIdx);
-    float detune          = mapDetune(detuneRaw);
-    float globalPhase   = controller.getSliderValue(gGlobalPhaseSliderIdx);
-    float nodeCoupling    = controller.getSliderValue(gNodeCouplingSliderIdx);
-    float ladderCoupling  = controller.getSliderValue(gLadderCouplingSliderIdx);
+    // All control CVs read at block rate — parameter values are constants
+    // throughout the frame loop; filter/coupling coefficient updates are expensive.
+    float cvF0           = 0.0f;
+    float cvDetune       = 0.0f;
+    float cvNodeCouplingA = 0.0f;
+    float cvNodeCouplingB = 0.0f;
+    float cvXCouplingAB  = 0.0f;
+    float cvXCouplingBA  = 0.0f;
+    if(context->analogFrames > 0) {
+        cvF0            = analogRead(context, 0, 2);
+        cvDetune        = analogRead(context, 0, 3);
+        cvNodeCouplingA = analogRead(context, 0, 4);
+        cvNodeCouplingB = analogRead(context, 0, 5);
+        cvXCouplingAB   = analogRead(context, 0, 6);
+        cvXCouplingBA   = analogRead(context, 0, 7);
+    }
+    float f0Center   = clampF0Hz(controller.getSliderValue(gF0SliderIdx) + cvF0 * kF0Max);
+    float detuneRaw  = fminf(fmaxf(controller.getSliderValue(gDetuneSliderIdx) + cvDetune, 0.0f), 1.0f);
+    float detune     = mapDetune(detuneRaw);
+    float globalPhase    = controller.getSliderValue(gGlobalPhaseSliderIdx);
+    float nodeCouplingA  = fminf(fmaxf(controller.getSliderValue(gNodeCouplingASliderIdx) + cvNodeCouplingA * 2.0f, 0.0f), 2.0f);
+    float nodeCouplingB  = fminf(fmaxf(controller.getSliderValue(gNodeCouplingBSliderIdx) + cvNodeCouplingB * 2.0f, 0.0f), 2.0f);
+    float xCouplingAB    = fminf(fmaxf(controller.getSliderValue(gXCouplingABSliderIdx)   + cvXCouplingAB,          0.0f), 1.0f);
+    float xCouplingBA    = fminf(fmaxf(controller.getSliderValue(gXCouplingBASliderIdx)   + cvXCouplingBA,          0.0f), 1.0f);
     float inputScanA    = controller.getSliderValue(gInputScanASliderIdx);
     float inputScanB    = controller.getSliderValue(gInputScanBSliderIdx);
     const float outputScanGuiA = controller.getSliderValue(gOutputScanASliderIdx);
     const float outputScanGuiB = controller.getSliderValue(gOutputScanBSliderIdx);
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
-    const float couplingSpend = nodeCoupling + 0.5f * ladderCoupling;
+    const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
+    const float couplingSpendB = nodeCouplingB + 0.5f * xCouplingAB;
     const float energyReserve = gEnergyReserve;
     const float reserveCurve = energyReserve * energyReserve;
     const float activeBudgetScale = 0.2f + 1.8f * reserveCurve;
@@ -433,6 +451,7 @@ void render(BelaContext *context, void *userData) {
 
             advanceDriftLfo(context, ch);
 
+            float nodeCouplingCh = (ch == SPEC_A) ? nodeCouplingA : nodeCouplingB;
             for(int i = 0; i < NUM_OSCS; i++) {
                 float intraSum = 0.0f;
                 for(int j = 0; j < NUM_OSCS; j++) {
@@ -440,7 +459,7 @@ void render(BelaContext *context, void *userData) {
                     if(w == 0.0f) continue;
                     intraSum += w * gPrevOscOut[ch][j];
                 }
-                float nodeIn = allIn + nodeCoupling * intraSum;
+                float nodeIn = allIn + nodeCouplingCh * intraSum;
                 float bandSig = processBiquad(bpFilters[ch][i],
                     nodeIn * excitationScale[i] * injectionBoost[i]);
                 float target  = fabsf(bandSig);
@@ -464,6 +483,7 @@ void render(BelaContext *context, void *userData) {
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
             const int other = 1 - ch;
+            float xCoupling = (ch == SPEC_A) ? xCouplingBA : xCouplingAB;
             for(int i = 0; i < NUM_OSCS; i++) {
                 float ladderMax = preEnv[other][i];
                 for(int j = 0; j < NUM_OSCS; j++) {
@@ -476,7 +496,7 @@ void render(BelaContext *context, void *userData) {
                                             + (1.0f - kCouplingMemCoeff) * ladderMax;
                 nodeEnvelope[ch][i] = fminf(
                     fmaxf(nodeEnvelope[ch][i],
-                          gLadderCouplingDrive[ch][i] * ladderCoupling),
+                          gLadderCouplingDrive[ch][i] * xCoupling),
                     1.05f
                 );
             }
@@ -495,6 +515,7 @@ void render(BelaContext *context, void *userData) {
                     nodeEnvelope[ch][i] *= scale;
             }
 
+            float couplingSpend = (ch == SPEC_A) ? couplingSpendA : couplingSpendB;
             float spend = meanSq * (0.0012f + 0.0055f * couplingSpend);
             gChannelEnergy[ch] = fmaxf(gChannelEnergy[ch] - spend - leakScale, 0.0f);
 

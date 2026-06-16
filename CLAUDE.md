@@ -65,16 +65,17 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 | Analog in 0 | Output scan A CV (0–1, summed with GUI) |
 | Analog in 1 | Output scan B CV (0–1, summed with GUI) |
 | Analog in 2 | Tune CV (0–1 → 0–1024 Hz offset) |
+| Analog in 3 | Detune CV (0–1, summed with GUI detune slider) |
+| Analog in 4 | Node Coupling A CV (0–1 → 0–2, summed with GUI) |
+| Analog in 5 | Node Coupling B CV (0–1 → 0–2, summed with GUI) |
+| Analog in 6 | X-Couple A→B CV (0–1, summed with GUI) |
+| Analog in 7 | X-Couple B→A CV (0–1, summed with GUI) |
 | Digital in 0 | SYNC — rising edge resets both ladders |
 
 **Planned (not yet wired):**
-- Analog in 3: Detune CV
-- Analog in 4: Node coupling CV
-- Analog in 5: Ladder coupling CV
-- Analog in 6: Input scan A CV (reserved)
-- Analog in 7: Input scan B CV (reserved)
 - Analog outs: Node envelope follower CVs (DC-coupled outputs 2–9)
 - Digital out 1: Sync out (F0)
+- Input scan A/B CV: deferred to IO expander
 
 ---
 
@@ -114,7 +115,7 @@ float gEnergyReserve = 0.45f;          // energy budget setpoint
 ## Known issues / active TODOs
 
 - **Ladder coupling uses `max` not `sum`** — intra-ladder coupling was changed to sum (physically correct, supports interference); ladder coupling still uses max (winner-take-all). Change to sum for consistency and chimera-supporting behavior.
-- **Controls update** - separate node coupling for A&B and directional cross-coupling (A→B, B→A) exist on hardware panel but are not yet wired in code — currently single shared `nodeCoupling`/`ladderCoupling` applies to both channels. Envelope follower attack/decay remain GUI-only (no panel controls planned).
+- **Controls update** - separate node coupling A/B and directional cross-coupling A→B/B→A are now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **No allpass in ladder coupling path** — intra-ladder node coupling has allpass phase lag (via VCFQ-style patching in hardware); ladder A↔B coupling path has no phase lag. Add ~π/2 allpass for chimera-supporting inter-ladder behavior.
 - **Global phase not on panel** — currently GUI slider only; useful for fine-tuning tone. Reserve an analog input on IO expander.
 
