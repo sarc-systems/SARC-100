@@ -370,6 +370,8 @@ bool setup(BelaContext *context, void *userData) {
 }
 
 void render(BelaContext *context, void *userData) {
+    // Read tune CV once per block — filter coefficient updates are expensive,
+    // so block-rate F0 resolution is intentional (unlike scan CVs which are per-frame).
     float cvF0 = 0.0f;
     if(context->analogFrames > 0)
         cvF0 = analogRead(context, 0, 2);
