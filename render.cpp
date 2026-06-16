@@ -52,6 +52,16 @@ float gInPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
 float gOutPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
 const float kPeakDecay = 0.99985f;
 
+// Effective parameter values (GUI offset + CV) — written by render(), read by meterGuiTask.
+float gEffF0Center     = 55.0f;
+float gEffDetuneRaw    = 0.0f;
+float gEffNodeCouplingA = 0.1f;
+float gEffNodeCouplingB = 0.1f;
+float gEffXCouplingAB  = 0.0f;
+float gEffXCouplingBA  = 0.0f;
+float gEffOutputScanA  = 0.5f;
+float gEffOutputScanB  = 0.5f;
+
 float amplitude = 4.0f;
 
 float omega[NUM_CHANNELS][NUM_OSCS];
@@ -327,6 +337,17 @@ void meterGuiTask(void *) {
             controller.setSliderValue(meterIdx[m], level);
             sent[m] = level;
         }
+
+        // CV parameter readbacks — show effective value (GUI offset + CV) in the slider
+        controller.setSliderValue(gF0SliderIdx,             gEffF0Center);
+        controller.setSliderValue(gDetuneSliderIdx,         gEffDetuneRaw);
+        controller.setSliderValue(gNodeCouplingASliderIdx,  gEffNodeCouplingA);
+        controller.setSliderValue(gNodeCouplingBSliderIdx,  gEffNodeCouplingB);
+        controller.setSliderValue(gXCouplingABSliderIdx,    gEffXCouplingAB);
+        controller.setSliderValue(gXCouplingBASliderIdx,    gEffXCouplingBA);
+        controller.setSliderValue(gOutputScanASliderIdx,    gEffOutputScanA);
+        controller.setSliderValue(gOutputScanBSliderIdx,    gEffOutputScanB);
+
 #ifdef __INTELLISENSE__
         for(volatile int d = 0; d < 80000; ++d) {}
 #else
@@ -406,6 +427,13 @@ void render(BelaContext *context, void *userData) {
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
     const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
     const float couplingSpendB = nodeCouplingB + 0.5f * xCouplingAB;
+
+    gEffF0Center      = f0Center;
+    gEffDetuneRaw     = detuneRaw;
+    gEffNodeCouplingA = nodeCouplingA;
+    gEffNodeCouplingB = nodeCouplingB;
+    gEffXCouplingAB   = xCouplingAB;
+    gEffXCouplingBA   = xCouplingBA;
     const float energyReserve = gEnergyReserve;
     const float reserveCurve = energyReserve * energyReserve;
     const float activeBudgetScale = 0.2f + 1.8f * reserveCurve;
@@ -534,6 +562,8 @@ void render(BelaContext *context, void *userData) {
         }
         float outputScanA = clampScan01(outputScanGuiA + cvScanA);
         float outputScanB = clampScan01(outputScanGuiB + cvScanB);
+        gEffOutputScanA = outputScanA;
+        gEffOutputScanB = outputScanB;
 
         int outNodeA, outNodeA_next, outNodeB, outNodeB_next;
         float gainNodeA, gainNextA, gainNodeB, gainNextB;
