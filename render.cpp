@@ -76,6 +76,20 @@ float gPrevF0Center = 55.0f;
 float gPrevDetune = 0.0f;
 int gSyncPrev = 0;
 
+// One-pole smoothing for the block-rate CV reads (F0/detune/node coupling/x-couple) —
+// kills ADC/analog noise without adding per-sample cost. gCvSmoothCoeff is derived from
+// a fixed time constant and the actual block period in setup(), so it stays correct
+// across sample-rate/block-size changes.
+float gSmCvF0 = 0.0f;
+float gSmCvDetune = 0.0f;
+float gSmCvNodeCouplingA = 0.0f;
+float gSmCvNodeCouplingB = 0.0f;
+float gSmCvXCouplingAB = 0.0f;
+float gSmCvXCouplingBA = 0.0f;
+float gCvSmoothCoeff = 1.0f;
+bool gCvSmoothInit = false;
+const float kCvSmoothTimeConstantS = 0.01f;
+
 struct Biquad {
     float b0, b1, b2, a1, a2;
     float x1, x2, y1, y2;
@@ -392,6 +406,10 @@ bool setup(BelaContext *context, void *userData) {
     initOscillators(context, 55.0f, 0.0f);
     gPrevF0Center = 55.0f;
     gPrevDetune = mapDetune(0.0f);
+
+    float blockPeriodS = (float)context->audioFrames / (float)context->audioSampleRate;
+    gCvSmoothCoeff = blockPeriodS / (kCvSmoothTimeConstantS + blockPeriodS);
+
     return true;
 }
 
@@ -412,21 +430,34 @@ void render(BelaContext *context, void *userData) {
         cvXCouplingAB   = analogRead(context, 0, ANALOG_XCOUPLE_AB_CV);
         cvXCouplingBA   = analogRead(context, 0, ANALOG_XCOUPLE_BA_CV);
     }
-    float f0Center   = clampF0Hz(cvF0 * kF0Max);
-    float detuneRaw  = clampScan01(cvDetune);
+    if(!gCvSmoothInit) {
+        gSmCvF0 = cvF0; gSmCvDetune = cvDetune;
+        gSmCvNodeCouplingA = cvNodeCouplingA; gSmCvNodeCouplingB = cvNodeCouplingB;
+        gSmCvXCouplingAB = cvXCouplingAB; gSmCvXCouplingBA = cvXCouplingBA;
+        gCvSmoothInit = true;
+    } else {
+        gSmCvF0            += gCvSmoothCoeff * (cvF0            - gSmCvF0);
+        gSmCvDetune        += gCvSmoothCoeff * (cvDetune        - gSmCvDetune);
+        gSmCvNodeCouplingA += gCvSmoothCoeff * (cvNodeCouplingA - gSmCvNodeCouplingA);
+        gSmCvNodeCouplingB += gCvSmoothCoeff * (cvNodeCouplingB - gSmCvNodeCouplingB);
+        gSmCvXCouplingAB   += gCvSmoothCoeff * (cvXCouplingAB   - gSmCvXCouplingAB);
+        gSmCvXCouplingBA   += gCvSmoothCoeff * (cvXCouplingBA   - gSmCvXCouplingBA);
+    }
+    float f0Center   = clampF0Hz(gSmCvF0 * kF0Max);
+    float detuneRaw  = clampScan01(gSmCvDetune);
     float detune     = mapDetune(detuneRaw);
     float globalPhase    = controller.getSliderValue(gGlobalPhaseSliderIdx);
-    float nodeCouplingA  = fminf(fmaxf(cvNodeCouplingA * 2.0f, 0.0f), 2.0f);
-    float nodeCouplingB  = fminf(fmaxf(cvNodeCouplingB * 2.0f, 0.0f), 2.0f);
-    float xCouplingAB    = clampScan01(cvXCouplingAB);
-    float xCouplingBA    = clampScan01(cvXCouplingBA);
+    float nodeCouplingA  = fminf(fmaxf(gSmCvNodeCouplingA * 2.0f, 0.0f), 2.0f);
+    float nodeCouplingB  = fminf(fmaxf(gSmCvNodeCouplingB * 2.0f, 0.0f), 2.0f);
+    float xCouplingAB    = clampScan01(gSmCvXCouplingAB);
+    float xCouplingBA    = clampScan01(gSmCvXCouplingBA);
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
     const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
     const float couplingSpendB = nodeCouplingB + 0.5f * xCouplingAB;
 
     gEffF0Center      = f0Center;
-    gEffDetuneRaw     = detuneRaw;
+    gEffDetuneRaw     = detune;
     gEffNodeCouplingA = nodeCouplingA;
     gEffNodeCouplingB = nodeCouplingB;
     gEffXCouplingAB   = xCouplingAB;
