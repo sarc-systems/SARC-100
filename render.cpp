@@ -19,7 +19,7 @@
 
 #include "pins.h"
 
-#define NUM_OSCS 11
+#define NUM_OSCS 7
 #define NUM_CHANNELS 2
 #define SPEC_A 0
 #define SPEC_B 1
@@ -101,16 +101,14 @@ float gPrevOscOut[NUM_CHANNELS][NUM_OSCS];
 float gLadderCouplingDrive[NUM_CHANNELS][NUM_OSCS];
 const float kCouplingMemCoeff = 0.997f;
 
-// 1/8 … 1, 3/2 … 7/2 (just intonation–friendly set)
+const int multNum[NUM_OSCS] = { 1, 1, 3, 2, 5, 3, 7 };
+const int multDen[NUM_OSCS] = { 2, 1, 2, 1, 2, 1, 2 };
 const float mult[NUM_OSCS] = {
-    1.0f/8.0f, 1.0f/6.0f, 1.0f/4.0f, 1.0f/3.0f, 1.0f/2.0f, 1.0f,
-    1.5f, 2.0f, 2.5f, 3.0f, 3.5f,
+    1.0f/2.0f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f,
 };
-const int multNum[NUM_OSCS] = { 1, 1, 1, 1, 1, 1, 3, 2, 5, 3, 7 };
-const int multDen[NUM_OSCS] = { 8, 6, 4, 3, 2, 1, 2, 1, 2, 1, 2 };
 
 static const float kInvNumOscs = 1.0f / (float)NUM_OSCS;
-static const float kDetuneMax = 0.05f;
+static const float kDetuneMax = 0.1f;
 static const float kDetuneLogK = 4.0f;
 
 inline float effectiveDetune(float detune) {
@@ -292,6 +290,7 @@ void initOscillators(BelaContext *context, float f0Center, float detuneSlider0to
     }
 }
 
+/*
 void computeInputScan(float scanPos, int &node, int &nodeNext, float &gain, float &gainNext) {
     float pos       = scanPos * NUM_OSCS;
     int   n         = (int)pos % NUM_OSCS;
@@ -301,6 +300,7 @@ void computeInputScan(float scanPos, int &node, int &nodeNext, float &gain, floa
     gain            = cosf_neon(frac * M_PI / 2.0f);
     gainNext        = sinf_neon(frac * M_PI / 2.0f);
 }
+*/
 
 void computeOutputScan(float scanPos, int &outNode, int &outNodeNext,
                        float &gain, float &gainNext) {
@@ -365,15 +365,15 @@ bool setup(BelaContext *context, void *userData) {
     controller.setup(&gui, "Harmonic Resonator");
 
     gGlobalPhaseSliderIdx   = controller.addSlider("Osc Phase",           0.0,    0.0,  6.2832, 0.001);
-    gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",     0.91,   0.9, 0.9999, 0.0001);
-    gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",      0.92,   0.9, 0.9999, 0.0001);
+    gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",  0.9041,    0.9, 0.9999, 0.0001);
+    gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",     0.91,    0.9, 0.9999, 0.0001);
     gInPeakASliderIdx       = controller.addSlider("In A Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gInPeakBSliderIdx       = controller.addSlider("In B Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gOutPeakASliderIdx      = controller.addSlider("Out A Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
     gOutPeakBSliderIdx      = controller.addSlider("Out B Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
 
     gF0DisplaySliderIdx           = controller.addSlider("F0 (eff)",            55.0,  0.0, 1024.0, 0.1);
-    gDetuneDisplaySliderIdx       = controller.addSlider("Detune (eff)",         0.18, 0.0,    1.0, 0.0001);
+    gDetuneDisplaySliderIdx       = controller.addSlider("Detune (eff)",         0.18, 0.0,    kDetuneMax, 0.000001);
     gNodeCouplingADisplaySliderIdx = controller.addSlider("Node Coupling A (eff)", 0.1, 0.0,    2.0, 0.001);
     gNodeCouplingBDisplaySliderIdx = controller.addSlider("Node Coupling B (eff)", 0.1, 0.0,    2.0, 0.001);
     gXCouplingABDisplaySliderIdx   = controller.addSlider("X-Couple A->B (eff)",   0.0, 0.0,    1.0, 0.001);
