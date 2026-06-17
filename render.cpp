@@ -98,6 +98,15 @@ float gCvSmoothCoeff = 1.0f;
 bool gCvSmoothInit = false;
 const float kCvSmoothTimeConstantS = 0.01f;
 
+// Tune CV also gets a frame-rate (audio-rate) smoothed copy, fed straight into omega —
+// the oscillator phase increment — so pitch can be modulated faster than the block rate.
+// Bandpass filter coefficients (Q/center-freq, expensive: trig per node) stay on the slow
+// gSmCvF0 path above via updateFrequencies()'s existing change-threshold gate; only the
+// phase increment itself decouples to audio rate. gCvSmoothCoeffFast uses the same time
+// constant as gCvSmoothCoeff, just expressed per-sample instead of per-block.
+float gSmCvF0Fast = 0.0f;
+float gCvSmoothCoeffFast = 1.0f;
+
 struct Biquad {
     float b0, b1, b2, a1, a2;
     float x1, x2, y1, y2;
@@ -253,6 +262,9 @@ inline float processBiquad(Biquad &f, float in) {
     return out;
 }
 
+// Bandpass filter coefficients only — expensive (trig per node), so left on the slow,
+// change-threshold-gated path. Oscillator phase rate (omega) is handled separately, every
+// frame, by updateOmegaFast() below, so pitch can move faster than the filter can follow.
 void updateFrequencies(BelaContext *context, int ch, float f0Spectrum) {
     for(int i = 0; i < NUM_OSCS; i++) {
         float baseFreq     = getFrequency(i, f0Spectrum);
@@ -261,10 +273,19 @@ void updateFrequencies(BelaContext *context, int ch, float f0Spectrum) {
         float spacing = fabsf(neighborFreq - baseFreq);
         float freq    = (baseFreq == 0.0f) ? 0.001f : baseFreq;
         float absFreq = fabsf(freq);
-        omega[ch][i] = 2.0f * M_PI * freq / context->audioSampleRate;
         float Q = absFreq / fmaxf(spacing, 1.0f) * nodeBandwidth;
         Q = fmaxf(0.5f, fminf(Q, 50.0f));
         updateBiquadBP(bpFilters[ch][i], absFreq, Q, context->audioSampleRate);
+    }
+}
+
+// Cheap (no trig) per-frame omega update — lets oscillator pitch follow Tune CV at audio
+// rate independent of the filter coefficient recompute above.
+inline void updateOmegaFast(BelaContext *context, int ch, float f0Spectrum) {
+    for(int i = 0; i < NUM_OSCS; i++) {
+        float baseFreq = getFrequency(i, f0Spectrum);
+        float freq = (baseFreq == 0.0f) ? 0.001f : baseFreq;
+        omega[ch][i] = 2.0f * M_PI * freq / context->audioSampleRate;
     }
 }
 
@@ -307,6 +328,8 @@ void initOscillators(BelaContext *context, float f0Center, float detuneSlider0to
     float f0B = f0Center * (1.0f + d);
     updateFrequencies(context, SPEC_A, f0A);
     updateFrequencies(context, SPEC_B, f0B);
+    updateOmegaFast(context, SPEC_A, f0A);
+    updateOmegaFast(context, SPEC_B, f0B);
     for(int ch = 0; ch < NUM_CHANNELS; ch++) {
         for(int f = 0; f < 3; f++)
             gDriftPhase[ch][f] = 0.0f;
@@ -427,6 +450,9 @@ bool setup(BelaContext *context, void *userData) {
     float blockPeriodS = (float)context->audioFrames / (float)context->audioSampleRate;
     gCvSmoothCoeff = blockPeriodS / (kCvSmoothTimeConstantS + blockPeriodS);
 
+    float samplePeriodS = 1.0f / (float)context->audioSampleRate;
+    gCvSmoothCoeffFast = samplePeriodS / (kCvSmoothTimeConstantS + samplePeriodS);
+
     return true;
 }
 
@@ -448,7 +474,7 @@ void render(BelaContext *context, void *userData) {
         cvXCoupleSymmetry = analogRead(context, 0, ANALOG_XCOUPLE_SYMMETRY_CV);
     }
     if(!gCvSmoothInit) {
-        gSmCvF0 = cvF0; gSmCvDetune = cvDetune;
+        gSmCvF0 = cvF0; gSmCvF0Fast = cvF0; gSmCvDetune = cvDetune;
         gSmCvNodeCouplingA = cvNodeCouplingA; gSmCvNodeCouplingB = cvNodeCouplingB;
         gSmCvXCoupleAmount = cvXCoupleAmount; gSmCvXCoupleSymmetry = cvXCoupleSymmetry;
         gCvSmoothInit = true;
@@ -528,6 +554,18 @@ void render(BelaContext *context, void *userData) {
         float nodeSin[NUM_CHANNELS][NUM_OSCS];
         float oscOut[NUM_CHANNELS][NUM_OSCS];
         float inputAbs[NUM_CHANNELS];
+
+        // Tune CV read and smoothed at audio rate, feeding omega directly — pitch can
+        // track modulation faster than the block-rate gSmCvF0/updateFrequencies() path
+        // above, which still governs the (expensive) bandpass filter coefficients.
+        if(context->analogFrames > 0) {
+            int af = analogFrameForAudio(context, frame);
+            float cvF0Frame = analogRead(context, af, ANALOG_TUNE_CV);
+            gSmCvF0Fast += gCvSmoothCoeffFast * (cvF0Frame - gSmCvF0Fast);
+        }
+        float f0CenterFast = clampF0Hz(gSmCvF0Fast * kF0Max);
+        updateOmegaFast(context, SPEC_A, f0CenterFast * (1.0f - detune));
+        updateOmegaFast(context, SPEC_B, f0CenterFast * (1.0f + detune));
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
             // ch indexes both SPEC_A/SPEC_B and AUDIO_IN_A/AUDIO_IN_B identically — see pins.h
