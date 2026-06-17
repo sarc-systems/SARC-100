@@ -45,8 +45,8 @@ unsigned int gF0DisplaySliderIdx;
 unsigned int gDetuneDisplaySliderIdx;
 unsigned int gNodeCouplingADisplaySliderIdx;
 unsigned int gNodeCouplingBDisplaySliderIdx;
-unsigned int gXCouplingABDisplaySliderIdx;
-unsigned int gXCouplingBADisplaySliderIdx;
+unsigned int gXCoupleAmountDisplaySliderIdx;
+unsigned int gXCoupleSymmetryDisplaySliderIdx;
 unsigned int gOutputScanADisplaySliderIdx;
 unsigned int gOutputScanBDisplaySliderIdx;
 
@@ -60,8 +60,8 @@ float gEffF0Center     = 55.0f;
 float gEffDetuneRaw    = 0.0f;
 float gEffNodeCouplingA = 0.1f;
 float gEffNodeCouplingB = 0.1f;
-float gEffXCouplingAB  = 0.0f;
-float gEffXCouplingBA  = 0.0f;
+float gEffXCoupleAmount   = 0.0f;
+float gEffXCoupleSymmetry = 0.5f;
 float gEffOutputScanA  = 0.5f;
 float gEffOutputScanB  = 0.5f;
 
@@ -84,8 +84,8 @@ float gSmCvF0 = 0.0f;
 float gSmCvDetune = 0.0f;
 float gSmCvNodeCouplingA = 0.0f;
 float gSmCvNodeCouplingB = 0.0f;
-float gSmCvXCouplingAB = 0.0f;
-float gSmCvXCouplingBA = 0.0f;
+float gSmCvXCoupleAmount = 0.0f;
+float gSmCvXCoupleSymmetry = 0.0f;
 float gCvSmoothCoeff = 1.0f;
 bool gCvSmoothInit = false;
 const float kCvSmoothTimeConstantS = 0.01f;
@@ -359,8 +359,8 @@ void meterGuiTask(void *) {
         controller.setSliderValue(gDetuneDisplaySliderIdx,        gEffDetuneRaw);
         controller.setSliderValue(gNodeCouplingADisplaySliderIdx, gEffNodeCouplingA);
         controller.setSliderValue(gNodeCouplingBDisplaySliderIdx, gEffNodeCouplingB);
-        controller.setSliderValue(gXCouplingABDisplaySliderIdx,   gEffXCouplingAB);
-        controller.setSliderValue(gXCouplingBADisplaySliderIdx,   gEffXCouplingBA);
+        controller.setSliderValue(gXCoupleAmountDisplaySliderIdx,   gEffXCoupleAmount);
+        controller.setSliderValue(gXCoupleSymmetryDisplaySliderIdx, gEffXCoupleSymmetry);
         controller.setSliderValue(gOutputScanADisplaySliderIdx,   gEffOutputScanA);
         controller.setSliderValue(gOutputScanBDisplaySliderIdx,   gEffOutputScanB);
 
@@ -392,8 +392,8 @@ bool setup(BelaContext *context, void *userData) {
     gDetuneDisplaySliderIdx       = controller.addSlider("Detune (eff)",         0.18, 0.0,    kDetuneMax, 0.000001);
     gNodeCouplingADisplaySliderIdx = controller.addSlider("Node Coupling A (eff)", 0.1, 0.0,    2.0, 0.001);
     gNodeCouplingBDisplaySliderIdx = controller.addSlider("Node Coupling B (eff)", 0.1, 0.0,    2.0, 0.001);
-    gXCouplingABDisplaySliderIdx   = controller.addSlider("X-Couple A->B (eff)",   0.0, 0.0,    1.0, 0.001);
-    gXCouplingBADisplaySliderIdx   = controller.addSlider("X-Couple B->A (eff)",   0.0, 0.0,    1.0, 0.001);
+    gXCoupleAmountDisplaySliderIdx   = controller.addSlider("XCouple Amount (eff)",   0.0, 0.0, 1.0, 0.001);
+    gXCoupleSymmetryDisplaySliderIdx = controller.addSlider("XCouple Symmetry (eff)", 0.5, 0.0, 1.0, 0.001);
     gOutputScanADisplaySliderIdx   = controller.addSlider("Output A Scan (eff)",   0.5, 0.0,    1.0, 0.001);
     gOutputScanBDisplaySliderIdx   = controller.addSlider("Output B Scan (eff)",   0.5, 0.0,    1.0, 0.001);
 
@@ -420,28 +420,28 @@ void render(BelaContext *context, void *userData) {
     float cvDetune       = 0.0f;
     float cvNodeCouplingA = 0.0f;
     float cvNodeCouplingB = 0.0f;
-    float cvXCouplingAB  = 0.0f;
-    float cvXCouplingBA  = 0.0f;
+    float cvXCoupleAmount   = 0.0f;
+    float cvXCoupleSymmetry = 0.0f;
     if(context->analogFrames > 0) {
         cvF0            = analogRead(context, 0, ANALOG_TUNE_CV);
         cvDetune        = analogRead(context, 0, ANALOG_DETUNE_CV);
         cvNodeCouplingA = analogRead(context, 0, ANALOG_NODE_COUPLING_A_CV);
         cvNodeCouplingB = analogRead(context, 0, ANALOG_NODE_COUPLING_B_CV);
-        cvXCouplingAB   = analogRead(context, 0, ANALOG_XCOUPLE_AB_CV);
-        cvXCouplingBA   = analogRead(context, 0, ANALOG_XCOUPLE_BA_CV);
+        cvXCoupleAmount   = analogRead(context, 0, ANALOG_XCOUPLE_AMOUNT_CV);
+        cvXCoupleSymmetry = analogRead(context, 0, ANALOG_XCOUPLE_SYMMETRY_CV);
     }
     if(!gCvSmoothInit) {
         gSmCvF0 = cvF0; gSmCvDetune = cvDetune;
         gSmCvNodeCouplingA = cvNodeCouplingA; gSmCvNodeCouplingB = cvNodeCouplingB;
-        gSmCvXCouplingAB = cvXCouplingAB; gSmCvXCouplingBA = cvXCouplingBA;
+        gSmCvXCoupleAmount = cvXCoupleAmount; gSmCvXCoupleSymmetry = cvXCoupleSymmetry;
         gCvSmoothInit = true;
     } else {
-        gSmCvF0            += gCvSmoothCoeff * (cvF0            - gSmCvF0);
-        gSmCvDetune        += gCvSmoothCoeff * (cvDetune        - gSmCvDetune);
-        gSmCvNodeCouplingA += gCvSmoothCoeff * (cvNodeCouplingA - gSmCvNodeCouplingA);
-        gSmCvNodeCouplingB += gCvSmoothCoeff * (cvNodeCouplingB - gSmCvNodeCouplingB);
-        gSmCvXCouplingAB   += gCvSmoothCoeff * (cvXCouplingAB   - gSmCvXCouplingAB);
-        gSmCvXCouplingBA   += gCvSmoothCoeff * (cvXCouplingBA   - gSmCvXCouplingBA);
+        gSmCvF0              += gCvSmoothCoeff * (cvF0              - gSmCvF0);
+        gSmCvDetune          += gCvSmoothCoeff * (cvDetune          - gSmCvDetune);
+        gSmCvNodeCouplingA   += gCvSmoothCoeff * (cvNodeCouplingA   - gSmCvNodeCouplingA);
+        gSmCvNodeCouplingB   += gCvSmoothCoeff * (cvNodeCouplingB   - gSmCvNodeCouplingB);
+        gSmCvXCoupleAmount   += gCvSmoothCoeff * (cvXCoupleAmount   - gSmCvXCoupleAmount);
+        gSmCvXCoupleSymmetry += gCvSmoothCoeff * (cvXCoupleSymmetry - gSmCvXCoupleSymmetry);
     }
     float f0Center   = clampF0Hz(gSmCvF0 * kF0Max);
     float detuneRaw  = clampScan01(gSmCvDetune);
@@ -449,8 +449,13 @@ void render(BelaContext *context, void *userData) {
     float globalPhase    = controller.getSliderValue(gGlobalPhaseSliderIdx);
     float nodeCouplingA  = fminf(fmaxf(gSmCvNodeCouplingA * 2.0f, 0.0f), 2.0f);
     float nodeCouplingB  = fminf(fmaxf(gSmCvNodeCouplingB * 2.0f, 0.0f), 2.0f);
-    float xCouplingAB    = clampScan01(gSmCvXCouplingAB);
-    float xCouplingBA    = clampScan01(gSmCvXCouplingBA);
+    float xCoupleAmount   = clampScan01(gSmCvXCoupleAmount);
+    float xCoupleSymmetry = clampScan01(gSmCvXCoupleSymmetry);
+    // Symmetry sweeps the Amount budget between directions (0 = all A->B, 1 = all B->A,
+    // 0.5 = split evenly) — constant-sum so total injected cross-energy never exceeds
+    // Amount regardless of where Symmetry sits, given how feedback-sensitive xCoupling is.
+    float xCouplingAB = xCoupleAmount * (1.0f - xCoupleSymmetry);
+    float xCouplingBA = xCoupleAmount * xCoupleSymmetry;
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
     const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
@@ -460,8 +465,8 @@ void render(BelaContext *context, void *userData) {
     gEffDetuneRaw     = detune;
     gEffNodeCouplingA = nodeCouplingA;
     gEffNodeCouplingB = nodeCouplingB;
-    gEffXCouplingAB   = xCouplingAB;
-    gEffXCouplingBA   = xCouplingBA;
+    gEffXCoupleAmount   = xCoupleAmount;
+    gEffXCoupleSymmetry = xCoupleSymmetry;
     const float energyReserve = gEnergyReserve;
     const float reserveCurve = energyReserve * energyReserve;
     const float activeBudgetScale = 0.2f + 1.8f * reserveCurve;

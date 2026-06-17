@@ -68,8 +68,8 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 | Analog in 3 | Detune CV (0–1, summed with GUI detune slider) |
 | Analog in 4 | Node Coupling A CV (0–1 → 0–2, summed with GUI) |
 | Analog in 5 | Node Coupling B CV (0–1 → 0–2, summed with GUI) |
-| Analog in 6 | X-Couple A→B CV (0–1, summed with GUI) |
-| Analog in 7 | X-Couple B→A CV (0–1, summed with GUI) |
+| Analog in 6 | X-Couple Amount CV (0–1, summed with GUI) — total cross-coupling budget |
+| Analog in 7 | X-Couple Symmetry CV (0–1, summed with GUI) — splits Amount between directions: 0 = all A→B, 1 = all B→A, 0.5 = even |
 | Digital in 0 | SYNC — rising edge resets both ladders |
 
 **Planned (not yet wired):**
@@ -95,7 +95,7 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 - Row 2: IN A attenuverter, SYNC in, Audio IN B, IN B attenuverter
 - Rows 3: Scan A CV (jack/att/offset), TUNE CV (jack/att/offset), DETUNE CV (jack/att/offset), Scan B CV (jack/att/offset)
 - Rows 4-5: attenuverters & offset for above
-- Rows 6: Node Couple A (jack/att/offset), X-Couple A→B, X-Couple B→A, Node Couple B (jack/att/offset)
+- Rows 6: Node Couple A (jack/att/offset), X-Couple Amount, X-Couple Symmetry, Node Couple B (jack/att/offset)
 - Rows 7-8: attenuverters & offset for above
 
 ---
@@ -115,7 +115,7 @@ float gEnergyReserve = 0.45f;          // energy budget setpoint
 ## Known issues / active TODOs
 
 - **No allpass in ladder coupling path** — intra-ladder node coupling has allpass phase lag (via VCFQ-style patching in hardware); ladder A↔B coupling path has no phase lag. Add ~π/2 allpass for chimera-supporting inter-ladder behavior.
-- **Controls update** - separate node coupling A/B and directional cross-coupling A→B/B→A are now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
+- **Controls update** - separate node coupling A/B, plus cross-coupling Amount/Symmetry (replacing independent A→B/B→A controls — Symmetry splits the Amount budget between directions, constant-sum, to keep total cross-injected energy bounded), now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **Global phase not on panel** — currently GUI slider only; useful for fine-tuning tone. Reserve an analog input on IO expander.
 
 [later - these will appear on an I/O expansion module]:

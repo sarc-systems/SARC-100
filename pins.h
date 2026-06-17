@@ -17,8 +17,8 @@
 #define ANALOG_DETUNE_CV          3   // Detune CV
 #define ANALOG_NODE_COUPLING_A_CV 4   // Node Coupling A CV
 #define ANALOG_NODE_COUPLING_B_CV 5   // Node Coupling B CV
-#define ANALOG_XCOUPLE_AB_CV      6   // Cross-couple A->B CV
-#define ANALOG_XCOUPLE_BA_CV      7   // Cross-couple B->A CV
+#define ANALOG_XCOUPLE_AMOUNT_CV   6   // Cross-couple amount CV (total budget)
+#define ANALOG_XCOUPLE_SYMMETRY_CV 7   // Cross-couple symmetry CV (0=A->B .. 1=B->A)
 
 // Digital
 #define SYNC_DIGITAL 0   // SYNC in — rising edge resets both ladders
