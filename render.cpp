@@ -19,6 +19,11 @@
 
 #include "pins.h"
 
+// Drift LFOs cost ~28 sinf_neon calls/sample (2 per node per channel) for a sub-0.06Hz,
+// near-imperceptible modulation — disabled for now to free up headroom at 96/24. Flip to 1
+// to restore; advanceDriftLfo/nodeDriftAmount are untouched, just unreached.
+#define KOSC_DRIFT_ENABLED 0
+
 #define NUM_OSCS 7
 #define NUM_CHANNELS 2
 #define SPEC_A 0
@@ -64,8 +69,7 @@ float amplitude = 4.0f;
 
 float omega[NUM_CHANNELS][NUM_OSCS];
 float theta[NUM_CHANNELS][NUM_OSCS];
-float excitationScale[NUM_OSCS];
-float injectionBoost[NUM_OSCS];
+float nodeExcitationGain[NUM_OSCS];
 float loudnessWeight[NUM_OSCS];
 
 float gPrevF0Center = 55.0f;
@@ -191,9 +195,7 @@ void buildCouplingWeights() {
 void buildExcitationScale() {
     float weightSum = 0.0f;
     for(int i = 0; i < NUM_OSCS; i++) {
-        excitationScale[i] = fminf(mult[i], 1.0f);
-        float boost = sqrtf(fmaxf(1.0f / mult[i], 1.0f));
-        injectionBoost[i] = boost;
+        nodeExcitationGain[i] = fminf(mult[i], 1.0f) * sqrtf(fmaxf(1.0f / mult[i], 1.0f));
         nodeBrightness[i] = fminf(fmaxf(log2f(mult[i] * 8.0f) / 6.0f, 0.0f), 1.0f);
 
         float fNorm = fmaxf(mult[i], 1.0f / 8.0f);
@@ -470,7 +472,9 @@ void render(BelaContext *context, void *userData) {
             inputAbs[ch] = fabsf(allIn);
             gInPeakHold[ch] = fmaxf(inputAbs[ch], gInPeakHold[ch] * kPeakDecay);
 
+#if KOSC_DRIFT_ENABLED
             advanceDriftLfo(context, ch);
+#endif
 
             float nodeCouplingCh = (ch == SPEC_A) ? nodeCouplingA : nodeCouplingB;
             for(int i = 0; i < NUM_OSCS; i++) {
@@ -482,7 +486,7 @@ void render(BelaContext *context, void *userData) {
                 }
                 float nodeIn = allIn + nodeCouplingCh * intraSum;
                 float bandSig = processBiquad(bpFilters[ch][i],
-                    nodeIn * excitationScale[i] * injectionBoost[i]);
+                    nodeIn * nodeExcitationGain[i]);
                 float target  = fabsf(bandSig);
 
                 if(target > nodeEnvelope[ch][i])
@@ -492,7 +496,11 @@ void render(BelaContext *context, void *userData) {
                     nodeEnvelope[ch][i] = nodeEffectiveDecay[i] * nodeEnvelope[ch][i]
                                         + (1.0f - nodeEffectiveDecay[i]) * target;
 
+#if KOSC_DRIFT_ENABLED
                 float drift = nodeDriftAmount(ch, i);
+#else
+                float drift = 0.0f;
+#endif
                 theta[ch][i] += omega[ch][i] * (1.0f + drift);
                 if(theta[ch][i] >  M_PI) theta[ch][i] -= 2.0f * M_PI;
                 if(theta[ch][i] < -M_PI) theta[ch][i] += 2.0f * M_PI;
