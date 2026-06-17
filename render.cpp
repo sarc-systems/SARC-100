@@ -24,6 +24,11 @@
 // to restore; advanceDriftLfo/nodeDriftAmount are untouched, just unreached.
 #define KOSC_DRIFT_ENABLED 0
 
+// Cross-ladder frequency pulling (Adler/Kuramoto phase coupling) — muted for now. Flip to 1
+// to restore; the Freq Lock Depth slider, its detune contribution, and the (eff) display
+// all stay live, only the actual phase pull into theta[][] is skipped.
+#define KOSC_FREQ_LOCK_ENABLED 1
+
 #define NUM_OSCS 7
 #define NUM_CHANNELS 2
 #define SPEC_A 0
@@ -34,6 +39,7 @@ GuiController controller;
 unsigned int gGlobalPhaseSliderIdx;
 unsigned int gNodeAttackSliderIdx;
 unsigned int gNodeDecaySliderIdx;
+unsigned int gFreqLockDepthSliderIdx;
 unsigned int gInPeakASliderIdx;
 unsigned int gInPeakBSliderIdx;
 unsigned int gOutPeakASliderIdx;
@@ -47,6 +53,7 @@ unsigned int gNodeCouplingADisplaySliderIdx;
 unsigned int gNodeCouplingBDisplaySliderIdx;
 unsigned int gXCoupleAmountDisplaySliderIdx;
 unsigned int gXCoupleSymmetryDisplaySliderIdx;
+unsigned int gFreqLockDepthDisplaySliderIdx;
 unsigned int gOutputScanADisplaySliderIdx;
 unsigned int gOutputScanBDisplaySliderIdx;
 
@@ -62,6 +69,7 @@ float gEffNodeCouplingA = 0.1f;
 float gEffNodeCouplingB = 0.1f;
 float gEffXCoupleAmount   = 0.0f;
 float gEffXCoupleSymmetry = 0.5f;
+float gEffFreqLockDepth = 0.0f;
 float gEffOutputScanA  = 0.5f;
 float gEffOutputScanB  = 0.5f;
 
@@ -115,6 +123,10 @@ const float kDriftNodeDepth = 0.00035f;
 
 // Intra-ladder: signal sum into bandpass (prev-sample oscOut, one tick delay)
 float gPrevOscOut[NUM_CHANNELS][NUM_OSCS];
+// Cross-ladder frequency pulling: prev-sample phase of the other ladder's corresponding
+// node (one tick delay, same reasoning as gPrevOscOut — avoids an ordering dependency
+// between the two channels within a sample).
+float gPrevTheta[NUM_CHANNELS][NUM_OSCS];
 // Cross-ladder: envelope coupling memory
 float gLadderCouplingDrive[NUM_CHANNELS][NUM_OSCS];
 const float kCouplingMemCoeff = 0.997f;
@@ -280,6 +292,7 @@ void resetSpectrumPhase(int ch) {
         theta[ch][i] = 0.0f;
         gLadderCouplingDrive[ch][i] = 0.0f;
         gPrevOscOut[ch][i] = 0.0f;
+        gPrevTheta[ch][i] = 0.0f;
     }
 }
 
@@ -302,6 +315,7 @@ void initOscillators(BelaContext *context, float f0Center, float detuneSlider0to
             nodeEnvelope[ch][i] = 0.0f;
             gLadderCouplingDrive[ch][i] = 0.0f;
             gPrevOscOut[ch][i] = 0.0f;
+            gPrevTheta[ch][i] = 0.0f;
         }
     }
 }
@@ -361,6 +375,7 @@ void meterGuiTask(void *) {
         controller.setSliderValue(gNodeCouplingBDisplaySliderIdx, gEffNodeCouplingB);
         controller.setSliderValue(gXCoupleAmountDisplaySliderIdx,   gEffXCoupleAmount);
         controller.setSliderValue(gXCoupleSymmetryDisplaySliderIdx, gEffXCoupleSymmetry);
+        controller.setSliderValue(gFreqLockDepthDisplaySliderIdx,   gEffFreqLockDepth);
         controller.setSliderValue(gOutputScanADisplaySliderIdx,   gEffOutputScanA);
         controller.setSliderValue(gOutputScanBDisplaySliderIdx,   gEffOutputScanB);
 
@@ -383,6 +398,7 @@ bool setup(BelaContext *context, void *userData) {
     gGlobalPhaseSliderIdx   = controller.addSlider("Osc Phase",           0.0,    0.0,  6.2832, 0.001);
     gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",  0.9041,    0.9, 0.9999, 0.0001);
     gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",     0.91,    0.9, 0.9999, 0.0001);
+    gFreqLockDepthSliderIdx = controller.addSlider("Freq Lock Depth",    0.0,     0.0, 0.5,    0.001);
     gInPeakASliderIdx       = controller.addSlider("In A Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gInPeakBSliderIdx       = controller.addSlider("In B Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gOutPeakASliderIdx      = controller.addSlider("Out A Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
@@ -394,6 +410,7 @@ bool setup(BelaContext *context, void *userData) {
     gNodeCouplingBDisplaySliderIdx = controller.addSlider("Node Coupling B (eff)", 0.1, 0.0,    2.0, 0.001);
     gXCoupleAmountDisplaySliderIdx   = controller.addSlider("XCouple Amount (eff)",   0.0, 0.0, 1.0, 0.001);
     gXCoupleSymmetryDisplaySliderIdx = controller.addSlider("XCouple Symmetry (eff)", 0.5, 0.0, 1.0, 0.001);
+    gFreqLockDepthDisplaySliderIdx   = controller.addSlider("Freq Lock Depth (eff)",  0.0, 0.0, 1.0, 0.001);
     gOutputScanADisplaySliderIdx   = controller.addSlider("Output A Scan (eff)",   0.5, 0.0,    1.0, 0.001);
     gOutputScanBDisplaySliderIdx   = controller.addSlider("Output B Scan (eff)",   0.5, 0.0,    1.0, 0.001);
 
@@ -458,6 +475,15 @@ void render(BelaContext *context, void *userData) {
     float xCouplingBA = xCoupleAmount * xCoupleSymmetry;
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
+    // Detune adds its own contribution to lock depth on top of the GUI slider — as the
+    // ladders are pushed further apart, the corresponding-node pull is dialed up too, so
+    // the system rides nearer the edge between sync and drift instead of just drifting
+    // apart unopposed. kDetuneLockDepthScale maps detune's full range (0..kDetuneMax) onto
+    // the same 0..0.5 span as the slider itself; flip the sign here to make it work the
+    // other way (more detune = less lock) if that reads better by ear.
+    const float kDetuneLockDepthScale = 5.0f;
+    float freqLockDepth = controller.getSliderValue(gFreqLockDepthSliderIdx)
+                         + detune * kDetuneLockDepthScale;
     const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
     const float couplingSpendB = nodeCouplingB + 0.5f * xCouplingAB;
 
@@ -467,6 +493,7 @@ void render(BelaContext *context, void *userData) {
     gEffNodeCouplingB = nodeCouplingB;
     gEffXCoupleAmount   = xCoupleAmount;
     gEffXCoupleSymmetry = xCoupleSymmetry;
+    gEffFreqLockDepth   = freqLockDepth;
     const float energyReserve = gEnergyReserve;
     const float reserveCurve = energyReserve * energyReserve;
     const float activeBudgetScale = 0.2f + 1.8f * reserveCurve;
@@ -537,7 +564,22 @@ void render(BelaContext *context, void *userData) {
 #else
                 float drift = 0.0f;
 #endif
-                theta[ch][i] += omega[ch][i] * (1.0f + drift);
+                // Cross-ladder injection locking (Adler/Kuramoto): pulls this node's phase
+                // toward the corresponding node in the other ladder, scaled by its own
+                // omega so the pull is a bounded fraction of its own frequency rather than
+                // an absolute Hz amount. Only valid between corresponding (same-index) node
+                // pairs since they're nearly equal frequency by construction (differ only by
+                // detune) — extending this to non-corresponding or intra-ladder pairs would
+                // need a generalized harmonic locking term (sin(a*theta_j - b*theta_i)), not
+                // implemented.
+#if KOSC_FREQ_LOCK_ENABLED
+                int otherCh = 1 - ch;
+                float phasePull = freqLockDepth * omega[ch][i]
+                                 * sinf_neon(gPrevTheta[otherCh][i] - theta[ch][i]);
+#else
+                float phasePull = 0.0f;
+#endif
+                theta[ch][i] += omega[ch][i] * (1.0f + drift) + phasePull;
                 if(theta[ch][i] >  M_PI) theta[ch][i] -= 2.0f * M_PI;
                 if(theta[ch][i] < -M_PI) theta[ch][i] += 2.0f * M_PI;
 
@@ -593,8 +635,10 @@ void render(BelaContext *context, void *userData) {
         }
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++)
-            for(int i = 0; i < NUM_OSCS; i++)
+            for(int i = 0; i < NUM_OSCS; i++) {
                 gPrevOscOut[ch][i] = oscOut[ch][i];
+                gPrevTheta[ch][i] = theta[ch][i];
+            }
 
         float cvScanA = 0.0f;
         float cvScanB = 0.0f;

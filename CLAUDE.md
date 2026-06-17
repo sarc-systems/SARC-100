@@ -31,9 +31,10 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 2. **Node coupling** — each node receives a weighted sum of neighbor `oscOut` values from the previous sample (one-tick delay avoids ordering dependency); weights from `couplingWeights[i][j]` matrix based on harmonic ratio simplicity
 3. **Bandpass + envelope** — per-node bandpass filter centered at node frequency; envelope follower on bandpass output; sine oscillator amplitude = envelope value
 4. **Ladder coupling** — cross-ladder envelope diffusion weighted by harmonic ratios, smoothed via `kCouplingMemCoeff = 0.997f`; uses sum (additive, same as intra-ladder coupling)
-5. **Energy budget** — per-channel `gEnergyReserve` (0–1) constrains total envelope energy; replenishes from input signal, spends proportional to coupling activity; prevents runaway
-6. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking
-7. **Scan out** — equal-power crossfade between adjacent nodes; scan position from CV + GUI
+5. **Cross-ladder frequency pulling** — Adler/Kuramoto-style phase coupling between corresponding (same-index) nodes in A and B: `theta[ch][i] += omega[ch][i]*(1+drift) + freqLockDepth*omega[ch][i]*sin(prevTheta[other][i] - theta[ch][i])`. `freqLockDepth` = GUI-only "Freq Lock Depth" slider (0–0.5) + `detune * kDetuneLockDepthScale(5.0)` — detune pushes the ladders apart while simultaneously dialing up the pull trying to hold corresponding nodes together, keeping the system near the sync/drift boundary rather than just drifting apart unopposed. Independent of XCouple Amount/Symmetry. Bounded/self-stabilizing (sin term), unlike envelope coupling. Only valid between corresponding pairs (near-equal frequency via detune); intra-ladder or non-corresponding pairs would need a generalized harmonic locking term (`sin(a·θⱼ - b·θᵢ)`) — not implemented.
+6. **Energy budget** — per-channel `gEnergyReserve` (0–1) constrains total envelope energy; replenishes from input signal, spends proportional to coupling activity; prevents runaway
+7. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking; currently disabled (`KOSC_DRIFT_ENABLED 0`) for CPU headroom — reversible
+8. **Scan out** — equal-power crossfade between adjacent nodes; scan position from CV + GUI
 
 ### Coupling matrix
 
@@ -108,6 +109,7 @@ constexpr float KOSC_EPSILON = 0.035f; // coupling weight threshold (sparse matr
 const float kCouplingMemCoeff = 0.997f; // ladder coupling smoothing
 float gEnergyReserve = 0.45f;          // energy budget setpoint
 // Drift LFO rates (Hz): 0.037, 0.059, 0.043 — irrational ratios, never phase-lock
+// Freq Lock Depth (GUI slider, 0-0.5): cross-ladder Adler/Kuramoto phase-pull strength
 ```
 
 ---
