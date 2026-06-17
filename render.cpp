@@ -17,30 +17,16 @@
 #include <libraries/math_neon/math_neon.h>
 #endif
 
+#include "pins.h"
+
 #define NUM_OSCS 11
 #define NUM_CHANNELS 2
 #define SPEC_A 0
 #define SPEC_B 1
 
-// Digital SYNC (gate/trigger) — one input resets both ladders (shared F0)
-#define SYNC_DIGITAL 0
-
-// Main audio I/O (ch 0/1): all-in / all-out for now.
-// Dedicated scan jacks + analog CV outs (ch 2+) when scan path is wired up.
-
 Gui gui;
 GuiController controller;
-unsigned int gF0SliderIdx;
-unsigned int gDetuneSliderIdx;
 unsigned int gGlobalPhaseSliderIdx;
-unsigned int gNodeCouplingASliderIdx;
-unsigned int gNodeCouplingBSliderIdx;
-unsigned int gXCouplingABSliderIdx;
-unsigned int gXCouplingBASliderIdx;
-unsigned int gInputScanASliderIdx;
-unsigned int gInputScanBSliderIdx;
-unsigned int gOutputScanASliderIdx;
-unsigned int gOutputScanBSliderIdx;
 unsigned int gNodeAttackSliderIdx;
 unsigned int gNodeDecaySliderIdx;
 unsigned int gInPeakASliderIdx;
@@ -48,11 +34,23 @@ unsigned int gInPeakBSliderIdx;
 unsigned int gOutPeakASliderIdx;
 unsigned int gOutPeakBSliderIdx;
 
+// Display-only readouts for effective (GUI + CV) values — never read back as control input,
+// so writing to these from meterGuiTask cannot feed back into render()'s parameter computation.
+unsigned int gF0DisplaySliderIdx;
+unsigned int gDetuneDisplaySliderIdx;
+unsigned int gNodeCouplingADisplaySliderIdx;
+unsigned int gNodeCouplingBDisplaySliderIdx;
+unsigned int gXCouplingABDisplaySliderIdx;
+unsigned int gXCouplingBADisplaySliderIdx;
+unsigned int gOutputScanADisplaySliderIdx;
+unsigned int gOutputScanBDisplaySliderIdx;
+
 float gInPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
 float gOutPeakHold[NUM_CHANNELS] = {0.0f, 0.0f};
 const float kPeakDecay = 0.99985f;
 
-// Effective parameter values (GUI offset + CV) — written by render(), read by meterGuiTask.
+// Effective parameter values (CV-driven, plus any panel offset already summed in hardware
+// before the jack) — written by render(), read by meterGuiTask.
 float gEffF0Center     = 55.0f;
 float gEffDetuneRaw    = 0.0f;
 float gEffNodeCouplingA = 0.1f;
@@ -338,15 +336,17 @@ void meterGuiTask(void *) {
             sent[m] = level;
         }
 
-        // CV parameter readbacks — show effective value (GUI offset + CV) in the slider
-        controller.setSliderValue(gF0SliderIdx,             gEffF0Center);
-        controller.setSliderValue(gDetuneSliderIdx,         gEffDetuneRaw);
-        controller.setSliderValue(gNodeCouplingASliderIdx,  gEffNodeCouplingA);
-        controller.setSliderValue(gNodeCouplingBSliderIdx,  gEffNodeCouplingB);
-        controller.setSliderValue(gXCouplingABSliderIdx,    gEffXCouplingAB);
-        controller.setSliderValue(gXCouplingBASliderIdx,    gEffXCouplingBA);
-        controller.setSliderValue(gOutputScanASliderIdx,    gEffOutputScanA);
-        controller.setSliderValue(gOutputScanBSliderIdx,    gEffOutputScanB);
+        // CV parameter readouts — separate display-only sliders, never read back as
+        // control input (would otherwise feed back into render()'s parameter computation
+        // and accumulate every tick).
+        controller.setSliderValue(gF0DisplaySliderIdx,            gEffF0Center);
+        controller.setSliderValue(gDetuneDisplaySliderIdx,        gEffDetuneRaw);
+        controller.setSliderValue(gNodeCouplingADisplaySliderIdx, gEffNodeCouplingA);
+        controller.setSliderValue(gNodeCouplingBDisplaySliderIdx, gEffNodeCouplingB);
+        controller.setSliderValue(gXCouplingABDisplaySliderIdx,   gEffXCouplingAB);
+        controller.setSliderValue(gXCouplingBADisplaySliderIdx,   gEffXCouplingBA);
+        controller.setSliderValue(gOutputScanADisplaySliderIdx,   gEffOutputScanA);
+        controller.setSliderValue(gOutputScanBDisplaySliderIdx,   gEffOutputScanB);
 
 #ifdef __INTELLISENSE__
         for(volatile int d = 0; d < 80000; ++d) {}
@@ -364,23 +364,22 @@ bool setup(BelaContext *context, void *userData) {
     gui.setup(context->projectName);
     controller.setup(&gui, "Harmonic Resonator");
 
-    gF0SliderIdx            = controller.addSlider("F0 (Hz)",            55.0,    0.0, 1024.0, 0.1);
-    gDetuneSliderIdx        = controller.addSlider("Detune",            0.18,     0.0,    1.0, 0.001);
     gGlobalPhaseSliderIdx   = controller.addSlider("Osc Phase",           0.0,    0.0,  6.2832, 0.001);
-    gNodeCouplingASliderIdx  = controller.addSlider("Node Coupling A",     0.1,    0.0,    2.0, 0.001);
-    gNodeCouplingBSliderIdx  = controller.addSlider("Node Coupling B",     0.1,    0.0,    2.0, 0.001);
-    gXCouplingABSliderIdx    = controller.addSlider("X-Couple A->B",       0.0,    0.0,    1.0, 0.001);
-    gXCouplingBASliderIdx    = controller.addSlider("X-Couple B->A",       0.0,    0.0,    1.0, 0.001);
-    gInputScanASliderIdx    = controller.addSlider("Input A Scan",        0.5,    0.0,    1.0, 0.001);
-    gInputScanBSliderIdx    = controller.addSlider("Input B Scan",        0.5,    0.0,    1.0, 0.001);
-    gOutputScanASliderIdx   = controller.addSlider("Output A Scan",       0.5,    0.0,    1.0, 0.001);
-    gOutputScanBSliderIdx   = controller.addSlider("Output B Scan",       0.5,    0.0,    1.0, 0.001);
     gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",     0.91,   0.9, 0.9999, 0.0001);
     gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",      0.92,   0.9, 0.9999, 0.0001);
     gInPeakASliderIdx       = controller.addSlider("In A Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gInPeakBSliderIdx       = controller.addSlider("In B Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gOutPeakASliderIdx      = controller.addSlider("Out A Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
     gOutPeakBSliderIdx      = controller.addSlider("Out B Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
+
+    gF0DisplaySliderIdx           = controller.addSlider("F0 (eff)",            55.0,  0.0, 1024.0, 0.1);
+    gDetuneDisplaySliderIdx       = controller.addSlider("Detune (eff)",         0.18, 0.0,    1.0, 0.0001);
+    gNodeCouplingADisplaySliderIdx = controller.addSlider("Node Coupling A (eff)", 0.1, 0.0,    2.0, 0.001);
+    gNodeCouplingBDisplaySliderIdx = controller.addSlider("Node Coupling B (eff)", 0.1, 0.0,    2.0, 0.001);
+    gXCouplingABDisplaySliderIdx   = controller.addSlider("X-Couple A->B (eff)",   0.0, 0.0,    1.0, 0.001);
+    gXCouplingBADisplaySliderIdx   = controller.addSlider("X-Couple B->A (eff)",   0.0, 0.0,    1.0, 0.001);
+    gOutputScanADisplaySliderIdx   = controller.addSlider("Output A Scan (eff)",   0.5, 0.0,    1.0, 0.001);
+    gOutputScanBDisplaySliderIdx   = controller.addSlider("Output B Scan (eff)",   0.5, 0.0,    1.0, 0.001);
 
     // Digital I/O setup
     pinMode(context, 0, SYNC_DIGITAL, INPUT);
@@ -404,25 +403,21 @@ void render(BelaContext *context, void *userData) {
     float cvXCouplingAB  = 0.0f;
     float cvXCouplingBA  = 0.0f;
     if(context->analogFrames > 0) {
-        cvF0            = analogRead(context, 0, 2);
-        cvDetune        = analogRead(context, 0, 3);
-        cvNodeCouplingA = analogRead(context, 0, 4);
-        cvNodeCouplingB = analogRead(context, 0, 5);
-        cvXCouplingAB   = analogRead(context, 0, 6);
-        cvXCouplingBA   = analogRead(context, 0, 7);
+        cvF0            = analogRead(context, 0, ANALOG_TUNE_CV);
+        cvDetune        = analogRead(context, 0, ANALOG_DETUNE_CV);
+        cvNodeCouplingA = analogRead(context, 0, ANALOG_NODE_COUPLING_A_CV);
+        cvNodeCouplingB = analogRead(context, 0, ANALOG_NODE_COUPLING_B_CV);
+        cvXCouplingAB   = analogRead(context, 0, ANALOG_XCOUPLE_AB_CV);
+        cvXCouplingBA   = analogRead(context, 0, ANALOG_XCOUPLE_BA_CV);
     }
-    float f0Center   = clampF0Hz(controller.getSliderValue(gF0SliderIdx) + cvF0 * kF0Max);
-    float detuneRaw  = fminf(fmaxf(controller.getSliderValue(gDetuneSliderIdx) + cvDetune, 0.0f), 1.0f);
+    float f0Center   = clampF0Hz(cvF0 * kF0Max);
+    float detuneRaw  = clampScan01(cvDetune);
     float detune     = mapDetune(detuneRaw);
     float globalPhase    = controller.getSliderValue(gGlobalPhaseSliderIdx);
-    float nodeCouplingA  = fminf(fmaxf(controller.getSliderValue(gNodeCouplingASliderIdx) + cvNodeCouplingA * 2.0f, 0.0f), 2.0f);
-    float nodeCouplingB  = fminf(fmaxf(controller.getSliderValue(gNodeCouplingBSliderIdx) + cvNodeCouplingB * 2.0f, 0.0f), 2.0f);
-    float xCouplingAB    = fminf(fmaxf(controller.getSliderValue(gXCouplingABSliderIdx)   + cvXCouplingAB,          0.0f), 1.0f);
-    float xCouplingBA    = fminf(fmaxf(controller.getSliderValue(gXCouplingBASliderIdx)   + cvXCouplingBA,          0.0f), 1.0f);
-    float inputScanA    = controller.getSliderValue(gInputScanASliderIdx);
-    float inputScanB    = controller.getSliderValue(gInputScanBSliderIdx);
-    const float outputScanGuiA = controller.getSliderValue(gOutputScanASliderIdx);
-    const float outputScanGuiB = controller.getSliderValue(gOutputScanBSliderIdx);
+    float nodeCouplingA  = fminf(fmaxf(cvNodeCouplingA * 2.0f, 0.0f), 2.0f);
+    float nodeCouplingB  = fminf(fmaxf(cvNodeCouplingB * 2.0f, 0.0f), 2.0f);
+    float xCouplingAB    = clampScan01(cvXCouplingAB);
+    float xCouplingBA    = clampScan01(cvXCouplingBA);
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
     const float couplingSpendA = nodeCouplingA + 0.5f * xCouplingBA;
@@ -455,9 +450,6 @@ void render(BelaContext *context, void *userData) {
         gPrevNodeDecay = nodeDecay;
     }
 
-    (void)inputScanA;
-    (void)inputScanB;
-
     for(unsigned int n = 0; n < context->digitalFrames; n++) {
         int sync = digitalRead(context, n, SYNC_DIGITAL);
         if(sync && !gSyncPrev)
@@ -473,6 +465,7 @@ void render(BelaContext *context, void *userData) {
         float inputAbs[NUM_CHANNELS];
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
+            // ch indexes both SPEC_A/SPEC_B and AUDIO_IN_A/AUDIO_IN_B identically — see pins.h
             float allIn = audioRead(context, frame, ch);
             inputAbs[ch] = fabsf(allIn);
             gInPeakHold[ch] = fmaxf(inputAbs[ch], gInPeakHold[ch] * kPeakDecay);
@@ -521,10 +514,16 @@ void render(BelaContext *context, void *userData) {
                 }
                 gLadderCouplingDrive[ch][i] = kCouplingMemCoeff * gLadderCouplingDrive[ch][i]
                                             + (1.0f - kCouplingMemCoeff) * ladderSum;
-                nodeEnvelope[ch][i] = fminf(
-                    nodeEnvelope[ch][i] + gLadderCouplingDrive[ch][i] * xCoupling,
-                    1.05f
-                );
+                // Attack-only pull toward the cross-ladder target, not an unconditional add:
+                // an unconditional add ratchets every sample with nothing but the hard clamp
+                // to stop it, so at slow nodeDecay even tiny xCoupling rails to ceiling almost
+                // instantly. Bounding it to the same attack dynamics as local excitation lets
+                // it decay back down on the next sample's local-target pass once the source
+                // ladder's energy fades, instead of being a permanent floor.
+                float crossTarget = fminf(gLadderCouplingDrive[ch][i] * xCoupling, 1.05f);
+                if(crossTarget > nodeEnvelope[ch][i])
+                    nodeEnvelope[ch][i] = nodeAttack * nodeEnvelope[ch][i]
+                                        + (1.0f - nodeAttack) * crossTarget;
             }
 
             gChannelEnergy[ch] = fminf(gChannelEnergy[ch] + replenishScale * inputAbs[ch], 2.2f);
@@ -557,11 +556,11 @@ void render(BelaContext *context, void *userData) {
         float cvScanB = 0.0f;
         if(context->analogFrames > 0) {
             int af = analogFrameForAudio(context, frame);
-            cvScanA = analogRead(context, af, 0);
-            cvScanB = analogRead(context, af, 1);
+            cvScanA = analogRead(context, af, ANALOG_SCAN_A_CV);
+            cvScanB = analogRead(context, af, ANALOG_SCAN_B_CV);
         }
-        float outputScanA = clampScan01(outputScanGuiA + cvScanA);
-        float outputScanB = clampScan01(outputScanGuiB + cvScanB);
+        float outputScanA = clampScan01(cvScanA);
+        float outputScanB = clampScan01(cvScanB);
         gEffOutputScanA = outputScanA;
         gEffOutputScanB = outputScanB;
 
@@ -580,8 +579,8 @@ void render(BelaContext *context, void *userData) {
         gOutPeakHold[0] = fmaxf(fabsf(outA), gOutPeakHold[0] * kPeakDecay);
         gOutPeakHold[1] = fmaxf(fabsf(outB), gOutPeakHold[1] * kPeakDecay);
 
-        audioWrite(context, frame, 0, outA);
-        audioWrite(context, frame, 1, outB);
+        audioWrite(context, frame, AUDIO_OUT_A, outA);
+        audioWrite(context, frame, AUDIO_OUT_B, outB);
 
     }
 }
