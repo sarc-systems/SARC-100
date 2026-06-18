@@ -1,0 +1,6 @@
+/* Peak meters: red label + value when ≥ 1.0 (clip). Toggled by sketch.js. */
+.dg .cr.clip-warning .property-name,
+.dg .cr.clip-warning input[type="text"] {
+  color: #e33 !important;
+  font-weight: 600;
+}
