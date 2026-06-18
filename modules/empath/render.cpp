@@ -40,6 +40,8 @@ unsigned int gGlobalPhaseSliderIdx;
 unsigned int gNodeAttackSliderIdx;
 unsigned int gNodeDecaySliderIdx;
 unsigned int gFreqLockDepthSliderIdx;
+unsigned int gPitchExciteDepthSliderIdx;
+unsigned int gPitchDecayDepthSliderIdx;
 unsigned int gInPeakASliderIdx;
 unsigned int gInPeakBSliderIdx;
 unsigned int gOutPeakASliderIdx;
@@ -78,6 +80,9 @@ float amplitude = 4.0f;
 float omega[NUM_CHANNELS][NUM_OSCS];
 float theta[NUM_CHANNELS][NUM_OSCS];
 float nodeExcitationGain[NUM_OSCS];
+// Ratio-only excitation gain (mult[i]-derived) before absolute-pitch scaling is applied —
+// see applyPitchEnergyScale().
+float nodeExcitationGainBase[NUM_OSCS];
 float loudnessWeight[NUM_OSCS];
 
 float gPrevF0Center = 55.0f;
@@ -120,6 +125,9 @@ const float nodeBandwidth = 0.5f;
 float couplingWeights[NUM_OSCS][NUM_OSCS];
 float nodeBrightness[NUM_OSCS];
 float nodeEffectiveDecay[NUM_OSCS];
+// Ratio-only decay (mult[i]/nodeBrightness[i]-derived, nodeDecay-slider-scaled) before
+// absolute-pitch scaling is applied — see applyPitchEnergyScale().
+float nodeEffectiveDecayBase[NUM_OSCS];
 float gPrevNodeDecay = 0.9995f;
 float gChannelEnergy[NUM_CHANNELS] = {0.0f, 0.0f};
 const float gEnergyReserve = 0.45f;
@@ -171,6 +179,21 @@ inline float clampF0Hz(float hz) {
     return fminf(fmaxf(hz, 0.0f), kF0Max);
 }
 
+// Absolute-pitch energy reference, independent of each node's harmonic ratio: at/above
+// kPitchEnergyRefHz a node gets no low-pitch penalty; at/below kPitchEnergyFloorHz it gets
+// the full penalty. Octave-scaled (log2) so the transition feels even across the range,
+// matching how pitch is perceived.
+const float kPitchEnergyRefHz = 220.0f;
+const float kPitchEnergyFloorHz = 24.0f;
+const float kPitchEnergyRangeOctaves = log2f(kPitchEnergyRefHz / kPitchEnergyFloorHz);
+const float kPitchDecayCeil = 0.9999f; // matches maxDecayCeil in buildNodeEffectiveDecay
+
+inline float pitchLowness(float absFreqHz) {
+    float f = fmaxf(absFreqHz, 1.0f);
+    float octavesBelowRef = log2f(kPitchEnergyRefHz / f);
+    return fminf(fmaxf(octavesBelowRef / kPitchEnergyRangeOctaves, 0.0f), 1.0f);
+}
+
 inline int analogFrameForAudio(BelaContext *context, int audioFrame) {
     if(context->analogFrames == 0) return 0;
     return (audioFrame * (int)context->analogFrames) / (int)context->audioFrames;
@@ -193,7 +216,7 @@ void buildNodeEffectiveDecay(float nodeDecay) {
     for(int i = 0; i < NUM_OSCS; i++) {
         float b = nodeBrightness[i];
         float slowerDecay = nodeDecay + (maxDecayCeil - nodeDecay) * lowBias * (1.0f - b);
-        nodeEffectiveDecay[i] = slowerDecay
+        nodeEffectiveDecayBase[i] = slowerDecay
             - (slowerDecay - minDecayFloor) * highDampBias * b;
     }
 }
@@ -230,7 +253,7 @@ void buildCouplingWeights() {
 void buildExcitationScale() {
     float weightSum = 0.0f;
     for(int i = 0; i < NUM_OSCS; i++) {
-        nodeExcitationGain[i] = fminf(mult[i], 1.0f) * sqrtf(fmaxf(1.0f / mult[i], 1.0f));
+        nodeExcitationGainBase[i] = fminf(mult[i], 1.0f) * sqrtf(fmaxf(1.0f / mult[i], 1.0f));
         nodeBrightness[i] = fminf(fmaxf(log2f(mult[i] * 8.0f) / 6.0f, 0.0f), 1.0f);
 
         float fNorm = fmaxf(mult[i], 1.0f / 8.0f);
@@ -240,6 +263,21 @@ void buildExcitationScale() {
     if(weightSum > 1e-9f)
         for(int i = 0; i < NUM_OSCS; i++)
             loudnessWeight[i] /= weightSum;
+}
+
+// Absolute-pitch energy/decay shaping, independent of buildExcitationScale()'s/
+// buildNodeEffectiveDecay()'s ratio-only (mult[i]/nodeBrightness[i]) shaping above. A lower
+// absolute F0 means physically larger resonators (tines, bars, strings) — harder to excite
+// and slower to die out, like a piano's bass strings vs. its treble. exciteDepth and
+// decayDepth are independent GUI sliders (0 = no effect, matches old behavior) so each can
+// be dialed in by ear separately.
+void applyPitchEnergyScale(float f0, float exciteDepth, float decayDepth) {
+    for(int i = 0; i < NUM_OSCS; i++) {
+        float lowness = pitchLowness(getFrequency(i, f0));
+        nodeExcitationGain[i] = nodeExcitationGainBase[i] * (1.0f - exciteDepth * lowness);
+        nodeEffectiveDecay[i] = nodeEffectiveDecayBase[i]
+            + (kPitchDecayCeil - nodeEffectiveDecayBase[i]) * decayDepth * lowness;
+    }
 }
 
 void updateBiquadBP(Biquad &f, float freq, float Q, float sampleRate) {
@@ -414,6 +452,7 @@ bool setup(BelaContext *context, void *userData) {
     buildCouplingWeights();
     buildExcitationScale();
     buildNodeEffectiveDecay(0.9995f);
+    applyPitchEnergyScale(55.0f, 0.0f, 0.0f);
 
     gui.setup(context->projectName);
     controller.setup(&gui, "Harmonic Resonator");
@@ -422,6 +461,8 @@ bool setup(BelaContext *context, void *userData) {
     gNodeAttackSliderIdx    = controller.addSlider("Node Env Attack",  0.9041,    0.9, 0.9999, 0.0001);
     gNodeDecaySliderIdx     = controller.addSlider("Node Env Decay",     0.91,    0.9, 0.9999, 0.0001);
     gFreqLockDepthSliderIdx = controller.addSlider("Freq Lock Depth",    0.0,     0.0, 0.5,    0.001);
+    gPitchExciteDepthSliderIdx = controller.addSlider("Pitch Excite Depth", 0.193, 0.0, 1.0, 0.001);
+    gPitchDecayDepthSliderIdx  = controller.addSlider("Pitch Decay Depth",  0.239, 0.0, 1.0, 0.001);
     gInPeakASliderIdx       = controller.addSlider("In A Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gInPeakBSliderIdx       = controller.addSlider("In B Peak (1=clip)",  0.0,    0.0, 1.2, 0.001);
     gOutPeakASliderIdx      = controller.addSlider("Out A Peak (1=clip)", 0.0,    0.0, 1.2, 0.001);
@@ -501,6 +542,8 @@ void render(BelaContext *context, void *userData) {
     float xCouplingBA = xCoupleAmount * xCoupleSymmetry;
     float nodeAttack    = controller.getSliderValue(gNodeAttackSliderIdx);
     float nodeDecay     = controller.getSliderValue(gNodeDecaySliderIdx);
+    float pitchExciteDepth = controller.getSliderValue(gPitchExciteDepthSliderIdx);
+    float pitchDecayDepth  = controller.getSliderValue(gPitchDecayDepthSliderIdx);
     // Detune adds its own contribution to lock depth on top of the GUI slider — as the
     // ladders are pushed further apart, the corresponding-node pull is dialed up too, so
     // the system rides nearer the edge between sync and drift instead of just drifting
@@ -540,6 +583,9 @@ void render(BelaContext *context, void *userData) {
         buildNodeEffectiveDecay(nodeDecay);
         gPrevNodeDecay = nodeDecay;
     }
+    // Cheap (no trig, NUM_OSCS iterations) — recomputed every block rather than
+    // change-gated like the trig-heavy paths above.
+    applyPitchEnergyScale(f0Center, pitchExciteDepth, pitchDecayDepth);
 
     for(unsigned int n = 0; n < context->digitalFrames; n++) {
         int sync = digitalRead(context, n, SYNC_DIGITAL);
