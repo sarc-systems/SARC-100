@@ -11,7 +11,7 @@ Developed in Cursor + SSH Remote; deployed with `bela-tools`.
 - **Repo:** github.com/sarc-systems/SARC-100 (module: `modules/empath/`)
 - **Hardware:** Bela Gem Multi (PocketBeagle 2, quad-core A53 @ 1.4GHz, 10 audio I/O)
 - **DAC:** ES9080Q — audio outputs 2–9 can be DC-coupled
-- **Dev environment:** Mac + Cursor SSH Remote to Bela; deploy via `bela deploy ~/scripts/kosc` or Run Task → Bela: Deploy
+- **Dev environment:** Mac + Cursor SSH Remote to Bela; deploy via `bela deploy ~/scripts/SARC-100/modules/empath` or Run Task → Bela: Deploy
 
 ---
 
@@ -157,7 +157,7 @@ Multiple Empath units coupled via envelope CV outputs and FM inputs form a **hie
 ## Deploy
 
 ```bash
-bela deploy ~/scripts/kosc
+bela deploy ~/scripts/SARC-100/modules/empath
 ```
 
 Or in Cursor: **Run Task → Bela: Deploy**

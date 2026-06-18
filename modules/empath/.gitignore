@@ -2,7 +2,7 @@
 build/
 *.o
 *.d
-kosc
+empath
 
 # macOS
 .DS_Store

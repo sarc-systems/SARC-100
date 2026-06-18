@@ -51,7 +51,7 @@ Internal: energy reserve, drift depth, coupling memory (`render.cpp`).
 ## Deploy
 
 ```bash
-bela deploy ~/scripts/kosc
+bela deploy ~/scripts/SARC-100/modules/empath
 ```
 
 Or Cursor: **Run Task → Bela: Deploy**
