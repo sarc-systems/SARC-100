@@ -1,4 +1,4 @@
-# kosc
+# empath
 
 Dual-ladder harmonic resonator for Bela Gem Multi — edit on Mac in Cursor, deploy with `bela-tools`.
 

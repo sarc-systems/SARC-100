@@ -1,4 +1,4 @@
-# CLAUDE.md — kosc / SARC Empath
+# CLAUDE.md — SARC Empath
 
 Dual-ladder harmonic resonator for Bela Gem Multi.
 Developed in Cursor + SSH Remote; deployed with `bela-tools`.
@@ -8,7 +8,7 @@ Developed in Cursor + SSH Remote; deployed with `bela-tools`.
 ## Project identity
 
 - **Instrument name:** SARC Empath [working title]
-- **Repo:** github.com/MoodOrgan/kosc
+- **Repo:** github.com/sarc-systems/SARC-100 (module: `modules/empath/`)
 - **Hardware:** Bela Gem Multi (PocketBeagle 2, quad-core A53 @ 1.4GHz, 10 audio I/O)
 - **DAC:** ES9080Q — audio outputs 2–9 can be DC-coupled
 - **Dev environment:** Mac + Cursor SSH Remote to Bela; deploy via `bela deploy ~/scripts/kosc` or Run Task → Bela: Deploy
@@ -34,7 +34,7 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 5. **Ladder coupling** — cross-ladder envelope diffusion weighted by harmonic ratios, smoothed via `kCouplingMemCoeff = 0.997f`; uses sum (additive, same as intra-ladder coupling)
 6. **Cross-ladder frequency pulling** — Adler/Kuramoto-style phase coupling between corresponding (same-index) nodes in A and B: `theta[ch][i] += omega[ch][i]*(1+drift) + freqLockDepth*omega[ch][i]*sin(prevTheta[other][i] - theta[ch][i])`. `freqLockDepth` = GUI-only "Freq Lock Depth" slider (0–0.5) + `detune * kDetuneLockDepthScale(5.0)` — detune pushes the ladders apart while simultaneously dialing up the pull trying to hold corresponding nodes together, keeping the system near the sync/drift boundary rather than just drifting apart unopposed. Independent of XCouple Amount/Symmetry. Bounded/self-stabilizing (sin term), unlike envelope coupling. Only valid between corresponding pairs (near-equal frequency via detune); intra-ladder or non-corresponding pairs would need a generalized harmonic locking term (`sin(a·θⱼ - b·θᵢ)`) — not implemented.
 7. **Energy budget** — per-channel `gEnergyReserve` (0–1) constrains total envelope energy; replenishes from input signal, spends proportional to coupling activity; prevents runaway
-8. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking; currently disabled (`KOSC_DRIFT_ENABLED 0`) for CPU headroom — reversible
+8. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking; currently disabled (`EMPATH_DRIFT_ENABLED 0`) for CPU headroom — reversible
 9. **Scan out** — equal-power crossfade between adjacent nodes; scan position from CV + GUI
 
 ### Coupling matrix
@@ -43,8 +43,8 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 - Ratio between node frequencies reduced to lowest terms
 - Base weight = `1.0f / (num_r + 0.35f * (den_r - 1))`
 - Asymmetry: lower-frequency nodes couple into higher ones more strongly (×1.15) than the reverse (×0.8); capped at 0.72 — models upward energy propagation in the harmonic series
-- Values below `KOSC_EPSILON` (0.035f) are skipped — sparse matrix, O(N·K) not O(N²)
-- `KOSC_LEGACY_COUPLING` flag available for comparison with old behavior
+- Values below `EMPATH_EPSILON` (0.035f) are skipped — sparse matrix, O(N·K) not O(N²)
+- `EMPATH_LEGACY_COUPLING` flag available for comparison with old behavior
 
 ### Energy budget
 
@@ -106,7 +106,7 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 
 ```cpp
 constexpr int NUM_OSCS = 11;          // nodes per ladder — soft ceiling, watch N² coupling
-constexpr float KOSC_EPSILON = 0.035f; // coupling weight threshold (sparse matrix)
+constexpr float EMPATH_EPSILON = 0.035f; // coupling weight threshold (sparse matrix)
 const float kCouplingMemCoeff = 0.997f; // ladder coupling smoothing
 float gEnergyReserve = 0.45f;          // energy budget setpoint
 // Drift LFO rates (Hz): 0.037, 0.059, 0.043 — irrational ratios, never phase-lock
