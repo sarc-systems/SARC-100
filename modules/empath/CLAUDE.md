@@ -72,11 +72,11 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 | Analog in 5 | Node Coupling B CV (0–1 → 0–2, summed with GUI) |
 | Analog in 6 | X-Couple Amount CV (0–1, summed with GUI) — total cross-coupling budget |
 | Analog in 7 | X-Couple Symmetry CV (0–1, summed with GUI) — splits Amount between directions: 0 = all A→B, 1 = all B→A, 0.5 = even |
-| Digital in 0 | SYNC — rising edge resets both ladders |
+| Digital in 0 | SYNC — rising edge smoothly pulls the 1x (identity) node's phase to 0 in each ladder over `kSyncPullSeconds` (~5ms), not a full-spectrum or instantaneous reset — see `gSyncPullSamplesRemaining` in the render loop |
+| Digital out 1 | SYNC out — trigger pulse (~2ms) once per F0 cycle, independent of ladder A/B detune; phase resets to 0 on SYNC in |
 
 **Planned (not yet wired):**
 - Analog outs: Node envelope follower CVs (DC-coupled outputs 2–9)
-- Digital out 1: Sync out (F0)
 - Input scan A/B CV: deferred to IO expander
 
 ---
@@ -120,6 +120,7 @@ float gEnergyReserve = 0.45f;          // energy budget setpoint
 - **No allpass in ladder coupling path** — intra-ladder node coupling has allpass phase lag (via VCFQ-style patching in hardware); ladder A↔B coupling path has no phase lag. Add ~π/2 allpass for chimera-supporting inter-ladder behavior.
 - **Controls update** - separate node coupling A/B, plus cross-coupling Amount/Symmetry (replacing independent A→B/B→A controls — Symmetry splits the Amount budget between directions, constant-sum, to keep total cross-injected energy bounded), now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **Global phase not on panel** — currently GUI slider only; useful for fine-tuning tone. Reserve an analog input on IO expander.
+- **SYNC IN audibly leaks into audio on the prototype panel** — confirmed hardware/electrical, not DSP: still audible with `EMPATH_SYNC_RESET_ENABLED` set to 0 (SYNC IN made a literal software no-op). Likely crosstalk between the digital SYNC line and the audio path (shared ground return, adjacent wiring). Unresolved; needs hardware-side investigation (try SYNC IN jack unplugged, check shielding/grounding) before revisiting software.
 
 [later - these will appear on an I/O expansion module]:
 - **Input scanning not implemented** — audio inputs currently all-in only. Hardware analog scanner (CD4051 + zero-crossing detect) planned for IO expander.

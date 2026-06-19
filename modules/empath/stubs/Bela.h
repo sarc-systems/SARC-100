@@ -23,6 +23,7 @@ struct BelaContext {
 inline float audioRead(BelaContext*, unsigned int, unsigned int) { return 0.0f; }
 inline void audioWrite(BelaContext*, unsigned int, unsigned int, float) {}
 inline int digitalRead(BelaContext*, unsigned int, unsigned int) { return 0; }
+inline void digitalWrite(BelaContext*, unsigned int, unsigned int, int) {}
 inline float analogRead(BelaContext*, unsigned int, unsigned int) { return 0.0f; }
 inline void analogWrite(BelaContext*, unsigned int, unsigned int, float) {}
 inline void pinMode(BelaContext*, unsigned int, unsigned int, int) {}

@@ -29,6 +29,12 @@
 // all stay live, only the actual phase pull into theta[][] is skipped.
 #define EMPATH_FREQ_LOCK_ENABLED 1
 
+// Diagnostic toggle — set to 0 to make SYNC IN a no-op in software, to check whether an
+// audible artifact on SYNC IN is DSP-caused or hardware/electrical (crosstalk from the
+// digital SYNC lines into the audio path). Confirmed hardware (still audible with this at 0)
+// — see CLAUDE.md known issues. Leave at 1; flip to 0 only to re-test the hardware theory.
+#define EMPATH_SYNC_RESET_ENABLED 1
+
 #define NUM_OSCS 7
 #define NUM_CHANNELS 2
 #define SPEC_A 0
@@ -88,6 +94,25 @@ float loudnessWeight[NUM_OSCS];
 float gPrevF0Center = 55.0f;
 float gPrevDetune = 0.0f;
 int gSyncPrev = 0;
+
+// Sync out: trigger pulse once per F0 cycle (the shared center frequency, independent of
+// ladder A/B detune) — tracks the audio-rate-smoothed gSmCvF0Fast so it follows Tune CV
+// glides at the same rate as the oscillators themselves. gSyncOutPulseLengthSamples is
+// derived from kSyncOutPulseSeconds in setup() once the real sample rate is known.
+float gSyncOutPhase = 0.0f;
+int gSyncOutPulseSamplesRemaining = 0;
+int gSyncOutPulseLengthSamples = 1;
+const float kSyncOutPulseSeconds = 0.002f;
+
+// Sync-in re-anchor: rather than snapping the identity node's theta to 0 (a discontinuity in
+// oscOut that's audible even at near-zero envelope, since theta keeps advancing every sample
+// regardless of envelope), pull it there smoothly over kSyncPullSeconds using the same bounded
+// Kuramoto sin-pull form as cross-ladder Freq Lock. Shared across both ladders since both
+// identity nodes are pulled on the same SYNC edge.
+int gSyncPullSamplesRemaining = 0;
+int gSyncPullLengthSamples = 1;
+const float kSyncPullSeconds = 0.005f;
+const float kSyncPullGain = 8.0f;
 
 // One-pole smoothing for the block-rate CV reads (F0/detune/node coupling/x-couple) —
 // kills ADC/analog noise without adding per-sample cost. gCvSmoothCoeff is derived from
@@ -153,6 +178,8 @@ const int multDen[NUM_OSCS] = { 2, 1, 2, 1, 2, 1, 2 };
 const float mult[NUM_OSCS] = {
     1.0f/2.0f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f,
 };
+// Index of the 1x (identity) ratio node — must match wherever multNum[i] == multDen[i].
+const int kIdentityNodeIdx = 1;
 
 static const float kInvNumOscs = 1.0f / (float)NUM_OSCS;
 static const float kDetuneMax = 0.1f;
@@ -346,18 +373,23 @@ void advanceDriftLfo(BelaContext *context, int ch) {
         gDriftPhase[ch][f] += inc * kDriftLfoHz[f];
 }
 
+// Re-anchors only the identity node's phase — touching just one node per ladder keeps any
+// disturbance local; it reaches neighboring nodes only gradually, through the existing
+// ratio-weighted node coupling matrix. theta itself is NOT snapped here — see
+// gSyncPullSamplesRemaining in the render loop, which pulls it to 0 smoothly instead, so
+// gPrevOscOut/gPrevTheta are left alone too (they follow theta's smooth convergence via the
+// normal end-of-frame copy). Bandpass/envelope state is left alone so amplitude doesn't jump.
 void resetSpectrumPhase(int ch) {
-    for(int i = 0; i < NUM_OSCS; i++) {
-        theta[ch][i] = 0.0f;
-        gLadderCouplingDrive[ch][i] = 0.0f;
-        gPrevOscOut[ch][i] = 0.0f;
-        gPrevTheta[ch][i] = 0.0f;
-    }
+    gLadderCouplingDrive[ch][kIdentityNodeIdx] = 0.0f;
 }
 
 void resetAllSpectra() {
+#if EMPATH_SYNC_RESET_ENABLED
     resetSpectrumPhase(SPEC_A);
     resetSpectrumPhase(SPEC_B);
+    gSyncOutPhase = 0.0f;
+    gSyncPullSamplesRemaining = gSyncPullLengthSamples;
+#endif
 }
 
 void initOscillators(BelaContext *context, float f0Center, float detuneSlider0to1) {
@@ -480,6 +512,13 @@ bool setup(BelaContext *context, void *userData) {
 
     // Digital I/O setup
     pinMode(context, 0, SYNC_DIGITAL, INPUT);
+    pinMode(context, 0, SYNC_OUT_DIGITAL, OUTPUT);
+    gSyncOutPulseLengthSamples = (int)(kSyncOutPulseSeconds * context->audioSampleRate);
+    if(gSyncOutPulseLengthSamples < 1)
+        gSyncOutPulseLengthSamples = 1;
+    gSyncPullLengthSamples = (int)(kSyncPullSeconds * context->audioSampleRate);
+    if(gSyncPullLengthSamples < 1)
+        gSyncPullLengthSamples = 1;
 
     AuxiliaryTask meterTask = Bela_createAuxiliaryTask(meterGuiTask, 0, "meter-gui", NULL);
     Bela_scheduleAuxiliaryTask(meterTask);
@@ -613,6 +652,19 @@ void render(BelaContext *context, void *userData) {
         updateOmegaFast(context, SPEC_A, f0CenterFast * (1.0f - detune));
         updateOmegaFast(context, SPEC_B, f0CenterFast * (1.0f + detune));
 
+        // Sync out: trigger once per F0 cycle, independent of ladder A/B detune.
+        gSyncOutPhase += 2.0f * M_PI * f0CenterFast / context->audioSampleRate;
+        if(gSyncOutPhase >= 2.0f * M_PI) {
+            gSyncOutPhase -= 2.0f * M_PI;
+            gSyncOutPulseSamplesRemaining = gSyncOutPulseLengthSamples;
+        }
+        digitalWrite(context, frame, SYNC_OUT_DIGITAL, gSyncOutPulseSamplesRemaining > 0 ? 1 : 0);
+        if(gSyncOutPulseSamplesRemaining > 0)
+            gSyncOutPulseSamplesRemaining--;
+        // gSyncPullSamplesRemaining itself decrements once below, after the per-node loop
+        // below has used it for this frame — see the sync-pull term in that loop.
+        bool syncPullActive = gSyncPullSamplesRemaining > 0;
+
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
             // ch indexes both SPEC_A/SPEC_B and AUDIO_IN_A/AUDIO_IN_B identically — see pins.h
             float allIn = audioRead(context, frame, ch);
@@ -663,7 +715,14 @@ void render(BelaContext *context, void *userData) {
 #else
                 float phasePull = 0.0f;
 #endif
-                theta[ch][i] += omega[ch][i] * (1.0f + drift) + phasePull;
+                // SYNC in re-anchor: pulls the identity node toward theta=0 over
+                // kSyncPullSeconds instead of snapping it, so there's no discontinuity in
+                // oscOut regardless of envelope level — see resetAllSpectra().
+                float syncPull = 0.0f;
+                if(syncPullActive && i == kIdentityNodeIdx)
+                    syncPull = kSyncPullGain * omega[ch][i] * sinf_neon(0.0f - theta[ch][i]);
+
+                theta[ch][i] += omega[ch][i] * (1.0f + drift) + phasePull + syncPull;
                 if(theta[ch][i] >  M_PI) theta[ch][i] -= 2.0f * M_PI;
                 if(theta[ch][i] < -M_PI) theta[ch][i] += 2.0f * M_PI;
 
@@ -671,6 +730,8 @@ void render(BelaContext *context, void *userData) {
                 preEnv[ch][i] = nodeEnvelope[ch][i];
             }
         }
+        if(syncPullActive)
+            gSyncPullSamplesRemaining--;
 
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
             const int other = 1 - ch;

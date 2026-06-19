@@ -22,7 +22,8 @@ Two **node ladders** (7 rungs each), ratios: ½, 1, ³⁄₂, 2, ⁵⁄₂, 3, �
 | **Analog in 4 / 5** | **Node Coupling A/B** CV (0–1 → 0–2, summed with GUI) |
 | **Analog in 6** | **X-Couple Amount** CV (0–1) — total cross-coupling budget |
 | **Analog in 7** | **X-Couple Symmetry** CV (0–1) — splits Amount: 0 = all A→B, 1 = all B→A |
-| **SYNC** (digital in 0) | Rising edge resets **both** ladders |
+| **SYNC** (digital in 0) | Rising edge smoothly pulls the 1x (identity) node's phase to 0 in each ladder (~5ms), click-free |
+| **SYNC out** (digital out 1) | Trigger pulse (~2ms) once per F0 cycle, independent of A/B detune |
 
 Scan in on dedicated jacks is planned; **Input A/B Scan** CV is reserved for that.
 

@@ -21,4 +21,5 @@
 #define ANALOG_XCOUPLE_SYMMETRY_CV 7   // Cross-couple symmetry CV (0=A->B .. 1=B->A)
 
 // Digital
-#define SYNC_DIGITAL 0   // SYNC in — rising edge resets both ladders
+#define SYNC_DIGITAL     0   // SYNC in — rising edge resets both ladders
+#define SYNC_OUT_DIGITAL 1   // SYNC out — trigger pulse once per F0 cycle
