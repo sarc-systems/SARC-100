@@ -4,67 +4,81 @@ This file orients an agent working in `modules/servo/`. It is operational, not a
 Full rationale lives in `docs/` (SARC-100 module index + design notes); read those for *why*, read
 this for *what* and *how*.
 
+**2026-06-21: redesigned.** SERVO is now a two-timescale PID leveling/AGC element with TARGET as
+its own independent input (no internal spline/curve-shaping) and CONFIDENCE redefined as a
+magnitude-AND-stability metric on ERROR. This supersedes the original spline-based seed design
+below.
+
 ## What SERVO is
-A cybernetic servo/governor module for the SARC-100 (a patch-programmable analog field computer;
-this module is prototyped in C++ on a **Bela Gem Multi**). SERVO observes a relationship between two
-input signals, drives an effector to make a controlled variable track a painted target relationship,
-and **reports its own sustained success as a confidence signal**. It is the first module built; its
-DSP primitives become the shared core (`lib/`) that later modules (phase network, etc.) reuse.
+A two-timescale PID leveling/AGC module for the SARC-100 (a patch-programmable analog field
+computer; this module is prototyped in C++ on a **Bela Gem Multi**). SERVO drives SIG toward
+TARGET via a PID stage, and reports three parallel taps off that core computation — ERROR (raw
+deviation), EFF (the drive signal), and CONFIDENCE (requires error to be both small and steady) —
+plus two fully independent magnitude-extraction outputs, MAGNI(ref) and MAGNI(sig). It is the
+first module built; its DSP primitives become the shared core (`lib/`) that later modules
+(phase network, etc.) reuse.
 
 Designed to be used in **multiples** and coupled in feedback networks — nothing in the code should
 assume a single global instance.
 
 ## Core behavior (the control loop)
-- Inputs REF and SIG are the two observed signals.
-- A **5-point spline** (with a TENSION control) paints the target: desired controlled-variable value
-  as a function of the reference. The servo tracks Y-given-X along this curve, not a fixed setpoint.
-- A **PID** produces the EFFECTOR output that drives the plant. Includes derivative filtering and
-  **anti-windup** (integral clamping / back-calculation) — REQUIRED, because in feedback patches the
-  servo is frequently asked for an unreachable target and must not wind up.
-- **Confidence** = a SLOW integration of sustained tracking success (NOT the PID integral term; a
-  separate, slower integrator). It is the module's judgment of how well it has been holding the
-  target over time. This is a first-class output, not a meter.
+- `MAGNI(ref)` and `MAGNI(sig)` extract magnitude/envelope from REF and SIG respectively.
+  Independent outputs — **no internal routing to TARGET or ERROR**. MAGNI(ref) sits adjacent to
+  the TARGET jack on the panel purely so a shorting bar or patch cable can manually bridge them if
+  desired. No normalling, no default signal path. If you want the old "ref's envelope is the
+  target" behavior, patch MAGNI(ref) into TARGET externally.
+- `ERROR = TARGET - SIG`. Raw deviation, unprocessed — uses the raw jacks, not MAGNI.
+- A **PID** produces `EFF`, the drive signal that acts on the plant. Includes derivative
+  filtering and **anti-windup** (conditional integration) — REQUIRED, because in feedback patches
+  the servo is frequently asked for an unreachable target and must not wind up.
+- `CONFIDENCE` = magnitude AND stability of ERROR, normalized, exported for patching elsewhere —
+  **not read back internally, does not gate or scale EFF**. Requires error to be BOTH small and
+  steady: large error reads as low confidence even if perfectly steady, and small-but-jittery
+  error also reads as low confidence. Computed as `magnitudeScore * stabilityScore` so either
+  factor being low drags the whole thing down — this is a refinement of the original
+  "`1 - slew(ERROR)`" framing, which omitted the magnitude term and would have let a large but
+  steady error read as confident.
+- ERROR, EFF, and CONFIDENCE are three parallel taps off the same core computation — none feeds
+  back into another internally.
 
 ## Two timescales (do not conflate)
-1. **Loop timescale** (`TIME` input, governs PID I + D): how fast the servo pursues. Scales the
-   integral rate and derivative-filter together by fixed design-time ratios that set the loop "feel."
-2. **Confidence timescale** (`GOVERNOR TIME MULT` input): how much slower the confidence integration
-   runs relative to the loop. Confidence must be slower than the PID integral.
-3. **Envelope-follower timescale** (`ENV RESPONSE` input, on REF & SIG): KEEP SEPARATE from the loop
-   timescale. The followers track the input envelopes and must stay valid regardless of how slow the
-   loop is set; do NOT gang them to TIME.
+1. **Loop timescale** (`SERVO RATE` input, governs PID I + D): how fast the servo pursues. Scales
+   the integral rate and derivative-filter together by fixed design-time ratios that set the loop
+   "feel."
+2. **Envelope-follower timescale** (`ENV RATE` input, on REF & SIG, feeding MAGNI): KEEP SEPARATE
+   from the loop timescale — do NOT gang it to SERVO RATE.
 
-## I/O (Bela analog — all DC-coupled; some require the wing-off audio inputs, see below)
-Inputs:
-- `REF` — reference signal
-- `SIG` — controlled/observed signal
-- `SPLINE 1..5` — five spline control points (target curve)
-- `TENSION` — spline tension (angular ↔ smooth interpolation)
-- `TIME` — loop (PID I+D) timescale
-- `GOVERNOR TIME MULT` — confidence-timescale multiplier (slower than loop)
-- `ENV RESPONSE` — envelope-follower timescale for REF & SIG
+CONFIDENCE's own smoothing (both the slew-rate estimate and its leaky-integrator rate) is a fixed
+internal constant in `render.cpp`, not CV/GUI-exposed — there is no Governor-Time-Mult-style input
+in this design. It's still kept slower than the loop by construction (a fixed fraction of the
+loop's own rate), just not user-tunable yet.
 
-Outputs:
-- `EFFECTOR` — PID control output (drives the plant)
-- `ERROR` — instantaneous tracking error
-- `CONFIDENCE` — slow integrated success (the governor judgment)
+## I/O (24 panel elements total)
+CV inputs (5), each with jack + attenuverter + offset:
+- `TARGET`, `REF`, `SIG`, `ENV RATE`, `SERVO RATE`
 
-Digital:
-- `FREEZE` (gate) — hold the loop: stop integrator accumulation, hold EFFECTOR at current value.
-- `RESET` (trigger) — clear integrator + confidence. Behavior set by a panel switch `RESET 0/last`:
-  - `0` → effector returns to neutral (0 for unipolar / center for bipolar)
-  - `last` → effector held at current value; integrator re-seeded so resumption is BUMPLESS
-    (clearing the integrator naively would lurch — seed it to reproduce the held output).
+CV outputs (5), jack only:
+- `ERROR`, `EFF` (+ UNI/BIPOLAR switch), `CONFIDENCE`, `MAGNI(ref)`, `MAGNI(sig)`
 
-Switches (panel, not CV):
-- `EFFECTOR MODE` — invert and unipolar/bipolar. The PID assumes a plant sign (more effector →
-  more controlled variable); patching a plant backwards requires the invert. Provide this.
-- `RESET 0/last` — see above.
+Digital I/O (4):
+- `FREEZE` (jack) — gate. Holds **only** the PID/EFF stage at its current value (integrator stops
+  accumulating, EFF locked). ERROR, MAGNI(ref), MAGNI(sig), and CONFIDENCE keep updating live off
+  REF/SIG/TARGET — FREEZE gates the PID stage's output only, not the upstream computations.
+- `RESET` (jack) — trigger. Clears the PID integrator. Behavior set by `RESET MODE`:
+  - `0` → EFF returns to neutral (0 for unipolar / center for bipolar)
+  - `last` → EFF held at current value; integrator re-seeded so resumption is BUMPLESS
+- `RESET MODE` switch — 0V vs last-value/bumpless (see above)
+- `EFF UNI/BIPOLAR` switch — output range -1..1 vs 0..1
+
+Removed from the original seed: SPLINE 1-5, TENSION (no internal target-curve anymore — TARGET is
+independent), GOVERNOR TIME MULT (CONFIDENCE's rate is now a fixed constant), EFFECTOR INVERT (not
+part of the new 24-element panel count).
 
 ## Output signal type
-EFFECTOR + CONFIDENCE together form the SARC universal type **(value, confidence)**. Keep them
-coherent and co-emitted; downstream modules treat (value, confidence) as one tuple. Do not let
-confidence become merely cosmetic.
+EFF + CONFIDENCE together still form the SARC universal type **(value, confidence)** for
+downstream patching — keep them coherent and co-emitted even though CONFIDENCE's definition
+changed (stability, not tracking success). ERROR and MAGNI(ref)/MAGNI(sig) are additional
+independent taps, not part of that tuple.
 
 ## Memory hooks (build later, design for now)
 SERVO holds NO long-term memory (that lives in a separate memory-surface module). But expose clean
@@ -72,44 +86,44 @@ state access (current effector, integrator state, confidence) and the FREEZE/RES
 memory surface can attach later without retrofitting.
 
 ## Code organization (IMPORTANT)
-- `lib/` is the SHARED, Bela-AGNOSTIC core. SERVO is the first module, so it CREATES these reusable
-  units here (do not inline them in the module): PID (`lib/dsp/pid`), spline-with-tension
-  (`lib/dsp/spline`), confidence/slow-integrator (`lib/dsp/confidence`), envelope follower
-  (`lib/dsp/envelope`). Write them as plain C++ with NO Bela dependencies so they are unit-testable
-  off-device.
+- `lib/` is the SHARED, Bela-AGNOSTIC core. PID (`lib/dsp/pid`), confidence/slow-integrator
+  (`lib/dsp/confidence`), envelope follower (`lib/dsp/envelope`) are used by this module.
+  `lib/dsp/spline` is no longer used by SERVO (TARGET is now independent) but stays in `lib/` —
+  the phase-network module may still reuse it. Write all of these as plain C++ with NO Bela
+  dependencies so they stay unit-testable off-device.
 - `modules/servo/` contains ONLY servo-specific code: the Bela render loop, analog I/O mapping,
   wiring the lib units together, panel/switch handling.
 - Dependency rule: modules depend on `lib/`; `lib/` NEVER depends on a module.
-- The phase-network module will reuse PID + spline + confidence verbatim — design them parameterized
-  and general, not servo-specific.
 
 ## Testing
-- Write a desktop test harness in `test/` that links the `lib/` units (no Bela) and exercises:
-  - spline: correct interpolation, tension behavior, C0/C1 continuity, no discontinuities.
-  - PID + plant sim: feed a simple simulated plant (gain, one-pole, saturating gain) and confirm the
-    loop converges and does NOT wind up at saturation.
-  - confidence: rises under sustained tracking, decays under disturbance, slower than the loop.
-- Validate the math on desktop BEFORE running on the Bela. Only the I/O glue needs the device.
+- `test/test_servo_dsp.cpp` exercises the `lib/dsp/` units directly (PID + plant sim, confidence
+  leaky-integrator behavior, spline — still tested even though SERVO itself no longer calls it,
+  since other modules may). Validate math on desktop BEFORE running on the Bela; only the I/O
+  glue needs the device.
+- Not yet covered on desktop: the CONFIDENCE = magnitudeScore * stabilityScore formula lives in
+  `render.cpp` itself (not `lib/dsp/`), since it's specific to this module's wiring rather than a
+  generic reusable unit — there's no desktop test for it yet.
 
 ## Bela / hardware notes
-- Target: Bela Gem Multi, DC-coupled analog I/O. The standard analog inputs are limited; several of
-  these inputs require the **wing-off / 2x12 header** DC-coupled audio inputs with level-shifting
-  conditioning (CV centered to the ADC range). Do not assume all inputs are on the standard analog
-  ins. Confirm pin mapping with the user before wiring.
+- Target: Bela Gem Multi, DC-coupled analog I/O. TARGET/REF/SIG/ENV RATE/SERVO RATE are confirmed
+  on the standard analog ins (A0-A4 in that order); EFFECTOR is confirmed on audio out 2
+  (DC-coupled, empirically verified with a 0.2Hz test LFO). ERROR/CONFIDENCE/MAGNI(ref)/MAGNI(sig)
+  (audio outs 3-6) are still ASSUMPTIONS in `pins.h` — confirm before wiring.
 - Prefer 96k if it holds; the DSP here is cheap (biquads, integrators) and should fit easily.
-- DC-coupled outputs required for EFFECTOR/ERROR/CONFIDENCE (they carry slow CV, not audio).
 
 ## Things that will bite (read before editing)
 - Anti-windup is not optional. Skipping it looks fine until the servo saturates, then lurches.
 - RESET `last` must be bumpless (re-seed the integrator), or it defeats its own purpose.
-- Effector sign: if the loop diverges on a real plant, it's probably patched backwards — that's the
-  EFFECTOR MODE invert, not a bug in the PID. Don't "fix" convergence by changing the PID.
-- Keep envelope-follower timescale independent of loop timescale (see Two timescales).
-- Don't build memory in. Confidence is a fast-ish local integrator here; long-term persistence is a
-  different module.
+- CONFIDENCE requires error to be BOTH small and steady — don't simplify it back to pure
+  magnitude (the old "tracking success" measure) or pure slew (the first draft of this redesign,
+  which let a large-but-steady error read as confident). It's a product of both scores on purpose.
+- FREEZE must NOT gate ERROR/MAGNI/CONFIDENCE — only the PID/EFF stage. It's tempting to wrap the
+  whole per-channel block in `if(!freezeActive)`; don't.
+- RESET must NOT clear CONFIDENCE — it's decoupled from the PID/EFF stage RESET targets.
 
 ## Canonical use (for context, not a code requirement)
-The signature patch: `CONFIDENCE` → a plant parameter (e.g. a filter's resonance/Q). The servo holds
-its amplitude target; as it succeeds, confidence rises and pushes the plant toward instability; the
-servo struggles, confidence falls, the plant relaxes — a self-seeking edge-of-chaos loop. This is why
-confidence must be a clean, slow, first-class output.
+The signature patch: `CONFIDENCE` → a plant parameter (e.g. a filter's resonance/Q). As ERROR
+shrinks and settles, confidence rises and pushes the plant toward instability; ERROR grows or
+starts moving again, confidence falls, the plant relaxes — a self-seeking edge-of-chaos loop.
+Requiring both smallness and steadiness (rather than either alone) means a stuck-but-steady error
+no longer reads as falsely confident the way a pure-slew metric would.
