@@ -88,9 +88,10 @@ memory surface can attach later without retrofitting.
 ## Code organization (IMPORTANT)
 - `lib/` is the SHARED, Bela-AGNOSTIC core. PID (`lib/dsp/pid`), confidence/slow-integrator
   (`lib/dsp/confidence`), envelope follower (`lib/dsp/envelope`) are used by this module.
-  `lib/dsp/spline` is no longer used by SERVO (TARGET is now independent) but stays in `lib/` —
-  the phase-network module may still reuse it. Write all of these as plain C++ with NO Bela
-  dependencies so they stay unit-testable off-device.
+  `lib/dsp/spline` is no longer used by SERVO (TARGET is now independent) — it was generalized
+  (`Spline5` -> templated `Spline<N>`, open curve, 3-way interpolation character) and is now
+  owned by `modules/spline/`. Write all of these as plain C++ with NO Bela dependencies so they
+  stay unit-testable off-device.
 - `modules/servo/` contains ONLY servo-specific code: the Bela render loop, analog I/O mapping,
   wiring the lib units together, panel/switch handling.
 - Dependency rule: modules depend on `lib/`; `lib/` NEVER depends on a module.

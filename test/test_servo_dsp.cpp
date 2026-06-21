@@ -1,11 +1,11 @@
 // Desktop validation for the servo module's lib/dsp/ units. No Bela, no
 // framework — plain checks that exit(1) on failure. Run via test/run.sh.
+// Spline is no longer part of servo's lib/dsp/ usage — see test_spline_dsp.cpp.
 
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 
-#include "../lib/dsp/spline.h"
 #include "../lib/dsp/pid.h"
 #include "../lib/dsp/confidence.h"
 
@@ -21,65 +21,6 @@ static int gChecks = 0;
 
 static bool nearlyEqual(float a, float b, float tol) {
 	return fabsf(a - b) <= tol;
-}
-
-// ---------------------------------------------------------------------------
-// Spline5
-// ---------------------------------------------------------------------------
-
-static void testSplineKnotExactness() {
-	Spline5 s;
-	float knots[5] = {0.1f, 0.9f, -0.4f, 0.6f, 0.0f};
-	s.setKnots(knots);
-	for (float tension : {0.0f, 0.4f, 1.0f}) {
-		s.setTension(tension);
-		float xs[5] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
-		for (int i = 0; i < 5; i++) {
-			CHECK(nearlyEqual(s.evaluate(xs[i]), knots[i], 1e-4f));
-		}
-	}
-	printf("ok: spline knot exactness across tensions\n");
-}
-
-static void testSplineTensionOneIsLinear() {
-	Spline5 s;
-	float knots[5] = {0.1f, 0.9f, -0.4f, 0.6f, 0.0f};
-	s.setKnots(knots);
-	s.setTension(1.0f);
-	for (int seg = 0; seg < 4; seg++) {
-		float x0 = seg * 0.25f;
-		float p0 = knots[seg];
-		float p1 = knots[seg + 1];
-		for (float t = 0.0f; t <= 1.0f; t += 0.1f) {
-			float x = x0 + t * 0.25f;
-			float expected = p0 + t * (p1 - p0);
-			CHECK(nearlyEqual(s.evaluate(x), expected, 1e-4f));
-		}
-	}
-	printf("ok: spline tension=1 reproduces linear interpolation\n");
-}
-
-static void testSplineTensionZeroIsSmooth() {
-	Spline5 s;
-	float knots[5] = {0.0f, 1.0f, 0.0f, 1.0f, 0.0f}; // zigzag, stresses curvature
-	s.setKnots(knots);
-	s.setTension(0.0f);
-
-	// No NaN/inf anywhere in or outside [0,1].
-	for (float x = -0.5f; x <= 1.5f; x += 0.01f) {
-		float v = s.evaluate(x);
-		CHECK(std::isfinite(v));
-	}
-
-	// C1 continuity at interior knots: left/right finite-difference slopes
-	// should agree closely (Catmull-Rom-style cardinal cubic is C1).
-	const float eps = 1e-3f;
-	for (float knotX : {0.25f, 0.5f, 0.75f}) {
-		float slopeLeft = (s.evaluate(knotX) - s.evaluate(knotX - eps)) / eps;
-		float slopeRight = (s.evaluate(knotX + eps) - s.evaluate(knotX)) / eps;
-		CHECK(nearlyEqual(slopeLeft, slopeRight, 0.1f));
-	}
-	printf("ok: spline tension=0 is smooth, no NaN/inf out of range\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +177,6 @@ static void testConfidenceSlowerThanLoop() {
 }
 
 int main() {
-	testSplineKnotExactness();
-	testSplineTensionOneIsLinear();
-	testSplineTensionZeroIsSmooth();
 	testPidConvergesOnReachableSetpoint();
 	testPidAntiWindup();
 	testPidBumplessReset();

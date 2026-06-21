@@ -46,7 +46,7 @@ Not yet wired at all: FREEZE/RESET digital pins, RESET MODE / EFF UNI-BIPOLAR pa
 
 ## Status
 
-TARGET/REF/SIG/ENV RATE/SERVO RATE ins (A0-A4) and EFFECTOR out (audio out 2) are hardware-confirmed. The four new audio outs (ERROR/CONFIDENCE/MAGNI ref/sig, outs 3-6) are code-side placeholders pending confirmation. `lib/dsp/` (envelope, PID, confidence) is shared, Bela-agnostic, desktop-tested in `test/` — `spline.h` still lives there for future modules but is no longer used by servo.
+TARGET/REF/SIG/ENV RATE/SERVO RATE ins (A0-A4) and EFFECTOR out (audio out 2) are hardware-confirmed. The four new audio outs (ERROR/CONFIDENCE/MAGNI ref/sig, outs 3-6) are code-side placeholders pending confirmation. `lib/dsp/` (envelope, PID, confidence) is shared, Bela-agnostic, desktop-tested in `test/` — `spline.h` is no longer used by servo; it was generalized and is now owned by `modules/spline/`.
 
 ## Deploy
 
