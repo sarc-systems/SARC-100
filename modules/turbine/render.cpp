@@ -30,13 +30,17 @@ const float kExpFmK = 10.0f;
 // same max rate as EXP FM above, for the two paths to feel comparable in range.
 const float kLinFmK = 22026.0f; // rad/s per unit cv
 
+// Default LIN FM bias gives an audible carrier (220Hz) out of the box instead of silence —
+// with the attenuverters gone, bias is the only thing setting the rate when nothing's
+// patched in, so a 0 default would just be a held DC phase.
+const float kDefaultFreqHz = 220.0f;
+const float kLinFmBiasDefault = (TWO_PI * kDefaultFreqHz) / kLinFmK;
+
 Gui gui;
 GuiController controller;
 
 unsigned int gExpFmBiasSliderIdx;
-unsigned int gExpFmAttenSliderIdx;
 unsigned int gLinFmBiasSliderIdx;
-unsigned int gLinFmAttenSliderIdx;
 
 // Display-only readouts — written only from the aux meter task (setSliderValue is not
 // RT-safe), never read back as control input. Mirrors empath/servo/spline's
@@ -107,12 +111,12 @@ bool setup(BelaContext *context, void *userData) {
 	gui.setup(context->projectName);
 	controller.setup(&gui, "Turbine");
 
-	// Bipolar bias (pull-pot) + attenuverter, standing in for the deferred physical panel —
-	// through-zero FM needs a true bipolar range, unlike most other modules' 0..1 CVs.
-	gExpFmBiasSliderIdx  = controller.addSlider("Exp FM Bias",        0.0, -1.0, 1.0, 0.001);
-	gExpFmAttenSliderIdx = controller.addSlider("Exp FM Attenuverter", 0.0, -1.0, 1.0, 0.001);
-	gLinFmBiasSliderIdx  = controller.addSlider("Lin FM Bias",        0.0, -1.0, 1.0, 0.001);
-	gLinFmAttenSliderIdx = controller.addSlider("Lin FM Attenuverter", 0.0, -1.0, 1.0, 0.001);
+	// Bipolar bias (pull-pot), standing in for the deferred physical panel — through-zero FM
+	// needs a true bipolar range, unlike most other modules' 0..1 CVs. Attenuverters are not
+	// on the GUI (no dev-stage knob for them yet) — a patched signal contributes at unity.
+	// Lin FM defaults to kLinFmBiasDefault (220Hz) so the module isn't silent out of the box.
+	gExpFmBiasSliderIdx = controller.addSlider("Exp FM Bias", 0.0, -1.0, 1.0, 0.001);
+	gLinFmBiasSliderIdx = controller.addSlider("Lin FM Bias", kLinFmBiasDefault, -1.0, 1.0, 0.001);
 
 	gExpFmInDisplaySliderIdx = controller.addSlider("Exp FM IN (A0)", 0.0, -1.0, 1.0, 0.001);
 	gLinFmInDisplaySliderIdx = controller.addSlider("Lin FM IN (A1)", 0.0, -1.0, 1.0, 0.001);
@@ -143,11 +147,9 @@ bool setup(BelaContext *context, void *userData) {
 void render(BelaContext *context, void *userData) {
 	float dt = 1.0f / (float)context->audioSampleRate;
 
-	// Bias/attenuverter are plain GUI knobs (no CV of their own) — block-rate read is enough.
-	float expBias  = controller.getSliderValue(gExpFmBiasSliderIdx);
-	float expAtten = controller.getSliderValue(gExpFmAttenSliderIdx);
-	float linBias  = controller.getSliderValue(gLinFmBiasSliderIdx);
-	float linAtten = controller.getSliderValue(gLinFmAttenSliderIdx);
+	// Bias is a plain GUI knob (no CV of its own) — block-rate read is enough.
+	float expBias = controller.getSliderValue(gExpFmBiasSliderIdx);
+	float linBias = controller.getSliderValue(gLinFmBiasSliderIdx);
 
 	for(int frame = 0; frame < context->audioFrames; frame++) {
 		int af = (context->analogFrames > 0) ? analogFrameForAudio(context, frame) : 0;
@@ -165,12 +167,11 @@ void render(BelaContext *context, void *userData) {
 		gExpFmIn = expSignal;
 		gLinFmIn = linSignal;
 
-		// Pull-pot bias summed with attenuverted patched signal, per standard panel grammar.
-		// Deliberately unclamped — an open-ended bipolar sum, same as a real attenuverter +
-		// bias op-amp stage (which would just rail at its own supply, not something to model
-		// here).
-		float expCv = expBias + expAtten * expSignal;
-		float linCv = linBias + linAtten * linSignal;
+		// Pull-pot bias summed with the patched signal at unity (no attenuverter knob yet).
+		// Deliberately unclamped — an open-ended bipolar sum, same as a real bias op-amp
+		// stage (which would just rail at its own supply, not something to model here).
+		float expCv = expBias + expSignal;
+		float linCv = linBias + linSignal;
 		gExpCv = expCv;
 		gLinCv = linCv;
 
@@ -216,16 +217,15 @@ void render(BelaContext *context, void *userData) {
 		gRampX4Out = rampX4; gRampX2Out = rampX2;
 		gEvenOut = even ? 1.0f : 0.0f; gHalfOut = half ? 1.0f : 0.0f;
 
-		// SIN/COS are genuinely audio-rate and bipolar -> AC-coupled pair, written directly
-		// (no 0..1 remap), matching empath's audio-out convention.
-		if(AUDIO_OUT_SIN < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_SIN, sinOut);
-		if(AUDIO_OUT_COS < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_COS, cosOut);
-		// RAMP/RAMP-PERP/Ramp x4 are already unipolar [0,1) -> DC-coupled outs, written as-is.
+		// All six outputs ride DC-coupled outs now (no AC-coupled pair used by this module) —
+		// bipolar signals (SIN, COS, Ramp x2) need the 0.5=0V remap for that write convention,
+		// matching servo's EFF; the unipolar ones (RAMP, RAMP-PERP, Ramp x4) are already [0,1)
+		// and write as-is.
+		if(AUDIO_OUT_SIN < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_SIN, sinOut * 0.5f + 0.5f);
+		if(AUDIO_OUT_COS < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_COS, cosOut * 0.5f + 0.5f);
 		if(AUDIO_OUT_RAMP < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP, ramp);
 		if(AUDIO_OUT_RAMP_PERP < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP_PERP, rampPerp);
 		if(AUDIO_OUT_RAMP_X4 < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP_X4, rampX4);
-		// Ramp x2 is bipolar riding a DC-coupled out -> remap to 0..1 for the write, matching
-		// servo's EFF convention (0.5 = 0V).
 		if(AUDIO_OUT_RAMP_X2 < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP_X2, rampX2 * 0.5f + 0.5f);
 
 		digitalWrite(context, frame, DIGITAL_EVEN, even ? 1 : 0);
