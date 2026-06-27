@@ -1,0 +1,7 @@
+build/
+*.o
+*.d
+tag
+
+# macOS
+.DS_Store
