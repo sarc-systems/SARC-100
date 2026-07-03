@@ -12,7 +12,7 @@ struct BelaContext {
 	unsigned int analogFrames = 0;
 	unsigned int analogInChannels = 8;
 	unsigned int analogOutChannels = 8;
-	const char* projectName = "empath";
+	const char* projectName = "tine";
 };
 
 #ifndef INPUT

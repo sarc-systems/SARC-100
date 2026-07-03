@@ -2,7 +2,7 @@
 build/
 *.o
 *.d
-empath
+tine
 
 # macOS
 .DS_Store

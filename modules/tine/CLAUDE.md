@@ -1,4 +1,4 @@
-# CLAUDE.md — SARC Empath
+# CLAUDE.md — SARC Tine
 
 Dual-ladder harmonic resonator for Bela Gem Multi.
 Developed in Cursor + SSH Remote; deployed with `bela-tools`.
@@ -7,11 +7,11 @@ Developed in Cursor + SSH Remote; deployed with `bela-tools`.
 
 ## Project identity
 
-- **Instrument name:** SARC Empath [working title]
-- **Repo:** github.com/sarc-systems/SARC-100 (module: `modules/empath/`)
+- **Instrument name:** SARC Tine [working title]
+- **Repo:** github.com/sarc-systems/SARC-100 (module: `modules/tine/`)
 - **Hardware:** Bela Gem Multi (PocketBeagle 2, quad-core A53 @ 1.4GHz, 10 audio I/O)
 - **DAC:** ES9080Q — audio outputs 2–9 can be DC-coupled
-- **Dev environment:** Mac + Cursor SSH Remote to Bela; deploy via `bela deploy ~/scripts/SARC-100/modules/empath` or Run Task → Bela: Deploy
+- **Dev environment:** Mac + Cursor SSH Remote to Bela; deploy via `bela deploy ~/scripts/SARC-100/modules/tine` or Run Task → Bela: Deploy
 
 ---
 
@@ -34,7 +34,7 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 5. **Ladder coupling** — cross-ladder envelope diffusion weighted by harmonic ratios, smoothed via `kCouplingMemCoeff = 0.997f`; uses sum (additive, same as intra-ladder coupling)
 6. **Cross-ladder frequency pulling** — Adler/Kuramoto-style phase coupling between corresponding (same-index) nodes in A and B: `theta[ch][i] += omega[ch][i]*(1+drift) + freqLockDepth*omega[ch][i]*sin(prevTheta[other][i] - theta[ch][i])`. `freqLockDepth` = GUI-only "Freq Lock Depth" slider (0–0.5) + `detune * kDetuneLockDepthScale(5.0)` — detune pushes the ladders apart while simultaneously dialing up the pull trying to hold corresponding nodes together, keeping the system near the sync/drift boundary rather than just drifting apart unopposed. Independent of XCouple Amount/Symmetry. Bounded/self-stabilizing (sin term), unlike envelope coupling. Only valid between corresponding pairs (near-equal frequency via detune); intra-ladder or non-corresponding pairs would need a generalized harmonic locking term (`sin(a·θⱼ - b·θᵢ)`) — not implemented.
 7. **Energy budget** — per-channel `gEnergyReserve` (0–1) constrains total envelope energy; replenishes from input signal, spends proportional to coupling activity; prevents runaway
-8. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking; currently disabled (`EMPATH_DRIFT_ENABLED 0`) for CPU headroom — reversible
+8. **Drift LFOs** — three slow LFOs per channel (0.037, 0.059, 0.043 Hz) modulate node frequencies in harmonic families; irrational ratios prevent locking; currently disabled (`TINE_DRIFT_ENABLED 0`) for CPU headroom — reversible
 9. **Scan out** — equal-power crossfade between adjacent nodes; scan position from CV + GUI
 
 ### Coupling matrix
@@ -43,8 +43,8 @@ Two independent **node ladders** (A and B), each with `NUM_OSCS` nodes tuned to 
 - Ratio between node frequencies reduced to lowest terms
 - Base weight = `1.0f / (num_r + 0.35f * (den_r - 1))`
 - Asymmetry: lower-frequency nodes couple into higher ones more strongly (×1.15) than the reverse (×0.8); capped at 0.72 — models upward energy propagation in the harmonic series
-- Values below `EMPATH_EPSILON` (0.035f) are skipped — sparse matrix, O(N·K) not O(N²)
-- `EMPATH_LEGACY_COUPLING` flag available for comparison with old behavior
+- Values below `TINE_EPSILON` (0.035f) are skipped — sparse matrix, O(N·K) not O(N²)
+- `TINE_LEGACY_COUPLING` flag available for comparison with old behavior
 
 ### Energy budget
 
@@ -81,7 +81,7 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 
 ---
 
-## Panel hardware (Empath Core prototype)
+## Panel hardware (Tine Core prototype)
 
 - **Format:** 4U Serge, 4-column Low-Gain boat (100.4mm × 175mm)
 - **Jacks:** 7mm banana (Rean NYS230 or equivalent)
@@ -106,7 +106,7 @@ Replenishes from `|inputSignal|`; spends on coupling activity. Controls how "ali
 
 ```cpp
 constexpr int NUM_OSCS = 11;          // nodes per ladder — soft ceiling, watch N² coupling
-constexpr float EMPATH_EPSILON = 0.035f; // coupling weight threshold (sparse matrix)
+constexpr float TINE_EPSILON = 0.035f; // coupling weight threshold (sparse matrix)
 const float kCouplingMemCoeff = 0.997f; // ladder coupling smoothing
 float gEnergyReserve = 0.45f;          // energy budget setpoint
 // Drift LFO rates (Hz): 0.037, 0.059, 0.043 — irrational ratios, never phase-lock
@@ -120,7 +120,7 @@ float gEnergyReserve = 0.45f;          // energy budget setpoint
 - **No allpass in ladder coupling path** — intra-ladder node coupling has allpass phase lag (via VCFQ-style patching in hardware); ladder A↔B coupling path has no phase lag. Add ~π/2 allpass for chimera-supporting inter-ladder behavior.
 - **Controls update** - separate node coupling A/B, plus cross-coupling Amount/Symmetry (replacing independent A→B/B→A controls — Symmetry splits the Amount budget between directions, constant-sum, to keep total cross-injected energy bounded), now implemented with CV inputs on ain 4–7. Envelope follower attack/decay remain GUI-only (no panel controls planned).
 - **Global phase not on panel** — currently GUI slider only; useful for fine-tuning tone. Reserve an analog input on IO expander.
-- **SYNC IN audibly leaks into audio on the prototype panel** — confirmed hardware/electrical, not DSP: still audible with `EMPATH_SYNC_RESET_ENABLED` set to 0 (SYNC IN made a literal software no-op). Likely crosstalk between the digital SYNC line and the audio path (shared ground return, adjacent wiring). Unresolved; needs hardware-side investigation (try SYNC IN jack unplugged, check shielding/grounding) before revisiting software.
+- **SYNC IN audibly leaks into audio on the prototype panel** — confirmed hardware/electrical, not DSP: still audible with `TINE_SYNC_RESET_ENABLED` set to 0 (SYNC IN made a literal software no-op). Likely crosstalk between the digital SYNC line and the audio path (shared ground return, adjacent wiring). Unresolved; needs hardware-side investigation (try SYNC IN jack unplugged, check shielding/grounding) before revisiting software.
 
 [later - these will appear on an I/O expansion module]:
 - **Input scanning not implemented** — audio inputs currently all-in only. Hardware analog scanner (CD4051 + zero-crossing detect) planned for IO expander.
@@ -146,19 +146,19 @@ The instrument implements a **harmonic resonator network** where:
 - Coupling topology is determined by number-theoretic relationships (just intonation ratios)
 - The coupling matrix is a **harmonic-ratio graph** — neither purely local nor all-to-all
 - Cross-ladder coupling with phase lag supports **chimera states** (coexistence of coherent and incoherent regions)
-- The system is the fast (Empath) layer of a three-layer SARC architecture:
-  - **Empath** (this): audio-rate morphogenetic layer
+- The system is the fast (Tine) layer of a three-layer SARC architecture:
+  - **Tine** (this): audio-rate morphogenetic layer
   - **Set**: analog PID governor / voltage processing
   - **Thoth**: tuple-based memory surface, slow reconfiguration
 
-Multiple Empath units coupled via envelope CV outputs and FM inputs form a **hierarchical multiplex network** capable of exhibiting chimera behavior with as few as 3–4 units.
+Multiple Tine units coupled via envelope CV outputs and FM inputs form a **hierarchical multiplex network** capable of exhibiting chimera behavior with as few as 3–4 units.
 
 ---
 
 ## Deploy
 
 ```bash
-bela deploy ~/scripts/SARC-100/modules/empath
+bela deploy ~/scripts/SARC-100/modules/tine
 ```
 
 Or in Cursor: **Run Task → Bela: Deploy**

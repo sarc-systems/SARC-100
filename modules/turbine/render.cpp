@@ -43,7 +43,7 @@ unsigned int gExpFmBiasSliderIdx;
 unsigned int gLinFmBiasSliderIdx;
 
 // Display-only readouts — written only from the aux meter task (setSliderValue is not
-// RT-safe), never read back as control input. Mirrors empath/servo/spline's
+// RT-safe), never read back as control input. Mirrors tine/servo/spline's
 // *DisplaySliderIdx convention.
 unsigned int gExpFmInDisplaySliderIdx;
 unsigned int gLinFmInDisplaySliderIdx;

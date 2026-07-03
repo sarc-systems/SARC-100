@@ -3,7 +3,7 @@
 // Standardized analog CV input for SARC modules.
 //
 // Wraps Bela's analogRead with one-pole smoothing (Smoother) to reject ADC
-// quantization steps and pot/wiper noise — the same conditioning EMPATH applied
+// quantization steps and pot/wiper noise — the same conditioning TINE applied
 // inline, factored out so every module reads CV the same way. One CvIn instance
 // per analog control.
 //
@@ -17,7 +17,7 @@
 //   float v = tune.read(context);    // in render(), once per block
 //
 // For a control that must track faster than the block (e.g. audio-rate pitch),
-// drive lib/dsp/Smoother directly at audio rate instead — see EMPATH's tune path.
+// drive lib/dsp/Smoother directly at audio rate instead — see TINE's tune path.
 
 #include "../dsp/smooth.h"
 

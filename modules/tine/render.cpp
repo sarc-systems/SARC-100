@@ -22,18 +22,18 @@
 // Drift LFOs cost ~28 sinf_neon calls/sample (2 per node per channel) for a sub-0.06Hz,
 // near-imperceptible modulation — disabled for now to free up headroom at 96/24. Flip to 1
 // to restore; advanceDriftLfo/nodeDriftAmount are untouched, just unreached.
-#define EMPATH_DRIFT_ENABLED 0
+#define TINE_DRIFT_ENABLED 0
 
 // Cross-ladder frequency pulling (Adler/Kuramoto phase coupling) — muted for now. Flip to 1
 // to restore; the Freq Lock Depth slider, its detune contribution, and the (eff) display
 // all stay live, only the actual phase pull into theta[][] is skipped.
-#define EMPATH_FREQ_LOCK_ENABLED 1
+#define TINE_FREQ_LOCK_ENABLED 1
 
 // Diagnostic toggle — set to 0 to make SYNC IN a no-op in software, to check whether an
 // audible artifact on SYNC IN is DSP-caused or hardware/electrical (crosstalk from the
 // digital SYNC lines into the audio path). Confirmed hardware (still audible with this at 0)
 // — see CLAUDE.md known issues. Leave at 1; flip to 0 only to re-test the hardware theory.
-#define EMPATH_SYNC_RESET_ENABLED 1
+#define TINE_SYNC_RESET_ENABLED 1
 
 #define NUM_OSCS 7
 #define NUM_CHANNELS 2
@@ -264,7 +264,7 @@ void buildCouplingWeights() {
             int num_r = num / g;
             int den_r = den / g;
 
-#ifdef EMPATH_LEGACY_COUPLING
+#ifdef TINE_LEGACY_COUPLING
             float w = 1.0f / (float)num_r;
 #else
             float complexity = (float)num_r + 0.35f * (float)(den_r - 1);
@@ -384,7 +384,7 @@ void resetSpectrumPhase(int ch) {
 }
 
 void resetAllSpectra() {
-#if EMPATH_SYNC_RESET_ENABLED
+#if TINE_SYNC_RESET_ENABLED
     resetSpectrumPhase(SPEC_A);
     resetSpectrumPhase(SPEC_B);
     gSyncOutPhase = 0.0f;
@@ -671,7 +671,7 @@ void render(BelaContext *context, void *userData) {
             inputAbs[ch] = fabsf(allIn);
             gInPeakHold[ch] = fmaxf(inputAbs[ch], gInPeakHold[ch] * kPeakDecay);
 
-#if EMPATH_DRIFT_ENABLED
+#if TINE_DRIFT_ENABLED
             advanceDriftLfo(context, ch);
 #endif
 
@@ -695,7 +695,7 @@ void render(BelaContext *context, void *userData) {
                     nodeEnvelope[ch][i] = nodeEffectiveDecay[i] * nodeEnvelope[ch][i]
                                         + (1.0f - nodeEffectiveDecay[i]) * target;
 
-#if EMPATH_DRIFT_ENABLED
+#if TINE_DRIFT_ENABLED
                 float drift = nodeDriftAmount(ch, i);
 #else
                 float drift = 0.0f;
@@ -708,7 +708,7 @@ void render(BelaContext *context, void *userData) {
                 // detune) — extending this to non-corresponding or intra-ladder pairs would
                 // need a generalized harmonic locking term (sin(a*theta_j - b*theta_i)), not
                 // implemented.
-#if EMPATH_FREQ_LOCK_ENABLED
+#if TINE_FREQ_LOCK_ENABLED
                 int otherCh = 1 - ch;
                 float phasePull = freqLockDepth * omega[ch][i]
                                  * sinf_neon(gPrevTheta[otherCh][i] - theta[ch][i]);

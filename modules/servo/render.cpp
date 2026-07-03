@@ -57,7 +57,7 @@ unsigned int gEffectorBipolarSliderIdx;
 unsigned int gResetModeSliderIdx;
 
 // Display-only readouts — written only from the aux meter task (setSliderValue
-// is not RT-safe), never read back as control input. Mirrors empath's
+// is not RT-safe), never read back as control input. Mirrors tine's
 // *DisplaySliderIdx convention.
 unsigned int gEffectorDisplaySliderIdx;
 unsigned int gErrorDisplaySliderIdx;
@@ -272,7 +272,7 @@ void render(BelaContext *context, void *userData) {
 	}
 
 	// FREEZE is level-sensitive (hold while high); RESET is edge-triggered.
-	// Mirrors empath's gSyncPrev edge-detect block: digital handling stays
+	// Mirrors tine's gSyncPrev edge-detect block: digital handling stays
 	// at block granularity even though digitalFrames may be finer.
 	bool freezeActive = false;
 	for(unsigned int n = 0; n < context->digitalFrames; n++) {

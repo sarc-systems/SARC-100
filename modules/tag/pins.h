@@ -5,7 +5,7 @@
 //
 // CLAUDE.md says "TBD during Bela prototype" for r_max and catch radius, and does not
 // assign specific pin numbers. Placeholder assignments below follow the project convention:
-// analog outs on DC-coupled audio outs 2+ (matching empath/servo/turbine), analog ins on
+// analog outs on DC-coupled audio outs 2+ (matching tine/servo/turbine), analog ins on
 // the standard 0-7 range, digital pins sequential from 0.
 
 // Analog in (CV) — per-player SPEED + global DAMPING.

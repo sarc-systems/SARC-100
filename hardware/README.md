@@ -10,5 +10,5 @@ Suggested naming: `<module>-panel.lbrn2`, with iteration history left to git rat
 than filename suffixes (`-v2`, `-final`, etc.).
 
 Physical panel specs (jack/pot/knob hardware, layout) stay documented in each
-module's own `CLAUDE.md` (e.g. `modules/empath/CLAUDE.md`'s "Panel hardware"
+module's own `CLAUDE.md` (e.g. `modules/tine/CLAUDE.md`'s "Panel hardware"
 section) — these files are the cut geometry that implements that spec.

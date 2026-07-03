@@ -51,7 +51,7 @@ Single Bela Gem Multi. 8 analog in / 6 analog out (2 spare). 2 digital in.
 
 ## Standardized CV read (lib/io/cv_input.h)
 All eight controls read through `CvIn` (block-rate, smoothed). This is the shared
-pattern EMPATH previously did inline, now factored into the lib so every module reads
+pattern TINE previously did inline, now factored into the lib so every module reads
 CV identically. New modules should use `CvIn`; existing modules can migrate to it.
 For controls needing audio-rate tracking, drive `lib/dsp/Smoother` per-sample instead.
 
@@ -164,7 +164,7 @@ resonator. FULCRUM rotates the master SINE/COSINE pair (why cos is exposed). SER
 governs depth via brightness. Degenerate case: RATIO A = 1/1 → clean master sine+ramp.
 
 ## Bela / hardware notes
-- `settings.json` mirrors EMPATH's (48k, uniform sample rate so analog runs at audio
+- `settings.json` mirrors TINE's (48k, uniform sample rate so analog runs at audio
   rate — frame index is valid for both `analogRead` and `analogWrite`).
 - Four trig calls/sample (`sinf_neon`/`cosf_neon`); cheap, should hold 48k easily.
 - Pin assignments in `pins.h` follow §1 — confirm against the locked panel before wiring.

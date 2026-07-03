@@ -1,6 +1,6 @@
 #pragma once
 
-// Bela jack/channel assignments for SARC Empath.
+// Bela jack/channel assignments for SARC Tine.
 // Single source of truth for I/O mapping — keep in sync with the
 // "I/O mapping (current)" table in CLAUDE.md.
 

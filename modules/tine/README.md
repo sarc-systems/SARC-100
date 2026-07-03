@@ -1,4 +1,4 @@
-# empath
+# tine
 
 Dual-ladder harmonic resonator for Bela Gem Multi — edit on Mac in Cursor, deploy with `bela-tools`.
 
@@ -35,7 +35,7 @@ Scan in on dedicated jacks is planned; **Input A/B Scan** CV is reserved for tha
 4. **Ladder Coupling** — cross-ladder envelope diffusion (ratio-weighted, smoothed)
 5. **Cross-ladder frequency pulling** — Adler/Kuramoto-style phase coupling between corresponding A/B nodes (`Freq Lock Depth` + detune-scaled pull), keeps ladders near the sync/drift boundary
 6. **Energy budget** — per-channel reserve constrains total envelope energy, replenished from input signal
-7. **Drift LFOs** — currently disabled (`EMPATH_DRIFT_ENABLED 0`)
+7. **Drift LFOs** — currently disabled (`TINE_DRIFT_ENABLED 0`)
 8. **Scan out** on main audio outputs
 
 **Absolute-pitch energy scaling:** a lower F0 makes physically larger resonators harder to excite and slower to decay (piano bass-string analogy); `Pitch Excite Depth` / `Pitch Decay Depth` dial this in independently (0 = no effect).
@@ -68,7 +68,7 @@ Internal: energy reserve, drift depth, coupling memory (`render.cpp`).
 ## Deploy
 
 ```bash
-bela deploy ~/scripts/SARC-100/modules/empath
+bela deploy ~/scripts/SARC-100/modules/tine
 ```
 
 Or Cursor: **Run Task → Bela: Deploy**

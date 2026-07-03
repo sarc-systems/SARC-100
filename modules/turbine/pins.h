@@ -5,7 +5,7 @@
 //
 // CLAUDE.md says "analog conversion deferred" — no real panel exists yet, so these are
 // placeholders like servo/spline's were before hardware confirmation. All six outputs ride
-// the DC-coupled outs (2+, confirmed DC-coupled on the Gem Multi in empath/servo) — none of
+// the DC-coupled outs (2+, confirmed DC-coupled on the Gem Multi in tine/servo) — none of
 // them use the standard AC-coupled pair (0/1). Bipolar ones (SIN, COS, Ramp x2) get the
 // 0.5=0V remap for that write convention (see render.cpp); the unipolar ones (RAMP,
 // RAMP-PERP, Ramp x4) write as-is.
