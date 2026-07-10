@@ -123,9 +123,13 @@ Gui gui;
 GuiController controller;
 unsigned int gDispFMaster, gDispD, gDispDepth, gDispBalance;
 unsigned int gDispPA, gDispQA, gDispPB, gDispQB;
-unsigned int gDispPhiA, gDispPhiB;
+unsigned int gDispRatioValA, gDispRatioValB;
+unsigned int gDispRatioAIn, gDispRatioBIn, gDispPhaseAIn, gDispPhaseBIn;
 
 double gEffBalance = 0.0;
+// Raw CV reads for the four sub-osc inputs — diagnostic meters to confirm the
+// RATIO A/B and PHASE A/B analog channels are actually delivering signal.
+float gRatioAIn = 0.0f, gRatioBIn = 0.0f, gPhaseAIn = 0.0f, gPhaseBIn = 0.0f;
 
 void meterGuiTask(void *) {
 	while(!Bela_stopRequested()) {
@@ -137,8 +141,12 @@ void meterGuiTask(void *) {
 		controller.setSliderValue(gDispQA,      (float)gSub[0].q);
 		controller.setSliderValue(gDispPB,      (float)gSub[1].p);
 		controller.setSliderValue(gDispQB,      (float)gSub[1].q);
-		controller.setSliderValue(gDispPhiA,    (float)gSub[0].phi);
-		controller.setSliderValue(gDispPhiB,    (float)gSub[1].phi);
+		controller.setSliderValue(gDispRatioValA, (float)gSub[0].p / (float)gSub[0].q);
+		controller.setSliderValue(gDispRatioValB, (float)gSub[1].p / (float)gSub[1].q);
+		controller.setSliderValue(gDispRatioAIn, gRatioAIn);
+		controller.setSliderValue(gDispRatioBIn, gRatioBIn);
+		controller.setSliderValue(gDispPhaseAIn, gPhaseAIn);
+		controller.setSliderValue(gDispPhaseBIn, gPhaseBIn);
 #ifdef __INTELLISENSE__
 		for(volatile int d = 0; d < 80000; ++d) {}
 #else
@@ -155,12 +163,16 @@ bool setup(BelaContext *context, void *userData) {
 	gDispD       = controller.addSlider("depth ceil",  1.0,   1.0, (float)D_MAX, 1.0);
 	gDispDepth   = controller.addSlider("PM index",    0.0,   0.0, MAX_INDEX, 0.001);
 	gDispBalance = controller.addSlider("PM balance", -0.0,  -1.0, 1.0, 0.001);
-	gDispPA      = controller.addSlider("p A", 1.0, 0.0, 4096.0, 1.0);
-	gDispQA      = controller.addSlider("q A", 1.0, 0.0, 4096.0, 1.0);
-	gDispPB      = controller.addSlider("p B", 1.0, 0.0, 4096.0, 1.0);
-	gDispQB      = controller.addSlider("q B", 1.0, 0.0, 4096.0, 1.0);
-	gDispPhiA    = controller.addSlider("phi A", 0.0, 0.0, 1.0, 0.001);
-	gDispPhiB    = controller.addSlider("phi B", 0.0, 0.0, 1.0, 0.001);
+	gDispPA      = controller.addSlider("p A", 1.0, 0.0, 256.0, 1.0);
+	gDispQA      = controller.addSlider("q A", 1.0, 0.0, 256.0, 1.0);
+	gDispPB      = controller.addSlider("p B", 1.0, 0.0, 256.0, 1.0);
+	gDispQB      = controller.addSlider("q B", 1.0, 0.0, 256.0, 1.0);
+	gDispRatioValA = controller.addSlider("ratio A (p/q)", 1.0, 0.0, 4.0, 0.001);
+	gDispRatioValB = controller.addSlider("ratio B (p/q)", 1.0, 0.0, 4.0, 0.001);
+	gDispRatioAIn = controller.addSlider("RATIO A in", 0.0, 0.0, 1.0, 0.001);
+	gDispRatioBIn = controller.addSlider("RATIO B in", 0.0, 0.0, 1.0, 0.001);
+	gDispPhaseAIn = controller.addSlider("PHASE A in", 0.0, 0.0, 1.0, 0.001);
+	gDispPhaseBIn = controller.addSlider("PHASE B in", 0.0, 0.0, 1.0, 0.001);
 
 	gTable.build(R_MIN, R_MAX, D_MAX);
 
@@ -188,8 +200,17 @@ void render(BelaContext *context, void *userData) {
 	// ── Control rate (per block, spec §8) ───────────────────────────────────
 	gFMaster = tuneMap(cvTune.read(context));
 	gD       = depthQuantize(cvComplexity.read(context), gD);
-	selectRatio(gSub[0], cvRatioA.read(context), gD);   // computes target (p,q); latched at wrap
-	selectRatio(gSub[1], cvRatioB.read(context), gD);
+
+	// Capture the sub-osc CV reads so the diagnostic meters show the raw channel value.
+	float ratioACv = cvRatioA.read(context);
+	float ratioBCv = cvRatioB.read(context);
+	float phaseACv = cvPhaseA.read(context);
+	float phaseBCv = cvPhaseB.read(context);
+	gRatioAIn = ratioACv; gRatioBIn = ratioBCv;
+	gPhaseAIn = phaseACv; gPhaseBIn = phaseBCv;
+
+	selectRatio(gSub[0], ratioACv, gD);   // computes target (p,q); latched at wrap
+	selectRatio(gSub[1], ratioBCv, gD);
 	gDepth   = indexMap(cvPmDepth.read(context));
 
 	double balance = (double)clamp01(cvPmBalance.read(context)) * 2.0 - 1.0;   // [-1,1]
@@ -198,8 +219,8 @@ void render(BelaContext *context, void *userData) {
 	gDA = gDepth * cos(th);                              // equal-power split:
 	gDB = gDepth * sin(th);                              //   dA^2 + dB^2 = depth^2
 
-	gSub[0].off = (double)clamp01(cvPhaseA.read(context));
-	gSub[1].off = (double)clamp01(cvPhaseB.read(context));
+	gSub[0].off = (double)clamp01(phaseACv);
+	gSub[1].off = (double)clamp01(phaseBCv);
 
 	// ── Per sample ──────────────────────────────────────────────────────────
 	for(unsigned int frame = 0; frame < context->audioFrames; ++frame) {
@@ -241,13 +262,15 @@ void render(BelaContext *context, void *userData) {
 		double arg = TWO_PI * gPhiMaster + gDA * (double)modA + gDB * (double)modB;
 
 		// Outputs (spec §2): sines as 0.5+0.5x (bipolar via DC output stage),
-		// ramps written directly (full-rail bipolar sawtooth).
-		analogWrite(context, frame, AN_OUT_SINE,   0.5f + 0.5f * sinf_neon((float)arg));
-		analogWrite(context, frame, AN_OUT_COSINE, 0.5f + 0.5f * cosf_neon((float)arg));
-		analogWrite(context, frame, AN_OUT_SINE_A, 0.5f + 0.5f * modA);
-		analogWrite(context, frame, AN_OUT_SINE_B, 0.5f + 0.5f * modB);
-		analogWrite(context, frame, AN_OUT_RAMP_A, (float)phiA);
-		analogWrite(context, frame, AN_OUT_RAMP_B, (float)phiB);
+		// ramps written directly (full-rail bipolar sawtooth). These go to the
+		// Gem Multi's DC-coupled AUDIO outs via audioWrite (audio-rate, frame index
+		// always valid) — analogWrite would index a nonexistent analog-out buffer.
+		if(AUDIO_OUT_SINE   < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_SINE,   0.5f + 0.5f * sinf_neon((float)arg));
+		if(AUDIO_OUT_COSINE < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_COSINE, 0.5f + 0.5f * cosf_neon((float)arg));
+		if(AUDIO_OUT_SINE_A < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_SINE_A, 0.5f + 0.5f * modA);
+		if(AUDIO_OUT_SINE_B < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_SINE_B, 0.5f + 0.5f * modB);
+		if(AUDIO_OUT_RAMP_A < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP_A, (float)phiA);
+		if(AUDIO_OUT_RAMP_B < context->audioOutChannels) audioWrite(context, frame, AUDIO_OUT_RAMP_B, (float)phiB);
 	}
 }
 

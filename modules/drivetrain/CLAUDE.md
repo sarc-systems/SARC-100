@@ -164,8 +164,14 @@ resonator. FULCRUM rotates the master SINE/COSINE pair (why cos is exposed). SER
 governs depth via brightness. Degenerate case: RATIO A = 1/1 → clean master sine+ramp.
 
 ## Bela / hardware notes
-- `settings.json` mirrors TINE's (48k, uniform sample rate so analog runs at audio
-  rate — frame index is valid for both `analogRead` and `analogWrite`).
+- `settings.json` mirrors TINE's (48k, uniform sample rate).
+- **Outputs use `audioWrite` to the Gem Multi's DC-coupled audio outs 2–7, NOT
+  `analogWrite`.** The spec §8 pseudocode says `analogWrite`, but on this hardware the
+  DC-coupled outputs are audio outs 2–9 (audioWrite); `analogWrite` targets a
+  nonexistent/short analog-out buffer and segfaults. Same convention as turbine/tag.
+  CV inputs are read with `analogRead` (block-rate, via `CvIn`), which is correct.
+- All analog I/O is bounds-guarded (`< audioOutChannels` on writes; `CvIn` guards
+  `< analogInChannels` on reads) so a channel-count mismatch degrades instead of crashing.
 - Four trig calls/sample (`sinf_neon`/`cosf_neon`); cheap, should hold 48k easily.
 - Pin assignments in `pins.h` follow §1 — confirm against the locked panel before wiring.
 
