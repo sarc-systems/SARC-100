@@ -35,7 +35,9 @@ public:
 	// Block-rate read: analog frame 0 of the current block, smoothed. Call once
 	// per render() block. If the context has no analog frames, holds last value.
 	float read(BelaContext *context) {
-		float raw = (context->analogFrames > 0) ? analogRead(context, 0, pin_) : sm_.value();
+		bool available = context->analogFrames > 0
+		                 && pin_ >= 0 && (unsigned)pin_ < context->analogInChannels;
+		float raw = available ? analogRead(context, 0, pin_) : sm_.value();
 		return sm_.process(raw);
 	}
 
