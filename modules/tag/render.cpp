@@ -27,12 +27,37 @@ const float kRMax        = 1.0f;    // boundary radius
 const float kRStart      = 0.5f;    // initial spawn radius (equally spaced at 120° on this circle)
 const float kCatchRadius = 0.15f;   // distance threshold for tag transfer
 
-// SPEED maps 0..1 bias+cv sum to 0..kMaxSpeed acceleration magnitude.
-// DAMPING maps 0..1 to 0..kMaxDamping viscous drag coefficient (s⁻¹).
-// At default (0.5 bias, no CV): speed ≈ 2.5 units/s², damping ≈ 2.5 s⁻¹ → terminal velocity ≈ 1 unit/s,
-// crossing r_max in roughly 1 second — a usable musical timescale.
-const float kMaxSpeed   = 5.0f;
-const float kMaxDamping = 5.0f;
+// SPEED maps its CV [0,1] EXPONENTIALLY to acceleration magnitude [kSpeedMin, kSpeedMax],
+// spanning slow-LFO motion up to audio-rate. (Linear would cram the slow region into a
+// sliver of the knob once the top is audio-rate.) DAMPING maps [0,1] linearly to
+// [0, kMaxDamping]; low DAMPING + high SPEED gives fast, sustained (oscillating) motion.
+const float kSpeedMin   = 2.0f;      // accel at SPEED cv=0 — slow LFO regime (units/s²)
+const float kSpeedMax   = 6000.0f;   // accel at SPEED cv=1 — audio-rate motion
+const float kMaxDamping = 2.5f;      // full-CV damping (halved from 5.0 for finer low-end control)
+
+// Tangential steering: how much the FLEE direction is rotated toward the tangent
+// (perpendicular) rather than pointing straight away from IT. 0 = pure radial (fleers run
+// straight to the wall and pin); higher = more curve/orbit, keeping r lively and the θ
+// rotation smoother. tan of the steer angle: 1 = 45°. Applied to fleeing only — IT keeps
+// direct pursuit so it still tags, and the tag/role-swap perturbs the system out of the
+// limit cycles that strong all-round orbiting settles into.
+const float kTangential = 0.15f;
+
+// Boundary containment gradient. An inward radial force that is zero in the interior
+// and ramps up (quadratically) once r passes kWallStart·r_max, so it gets progressively
+// harder to move outward near the edge. It contains players whose SPEED accel is below
+// kWallStrength (the low-SPEED "orbit" regime); above that they reach r_max and the
+// reflecting boundary (below) bounces them. So SPEED sweeps smoothly from soft orbits
+// to hard audio-rate bouncing.
+const float kWallStart    = 0.75f;   // fraction of r_max where containment begins
+const float kWallStrength = 60.0f;   // inward accel scale at r_max (units/s²)
+
+// At audio-rate speeds the soft gradient can't hold a player, so r_max is also a
+// REFLECTING boundary: a player crossing it is projected back and its radial velocity
+// bounced inward (scaled by kRestitution < 1 to shed energy). This replaces the old
+// reset-on-wall behavior — the boundary now bounces at any speed instead of respawning.
+const float kRestitution  = 0.8f;    // radial velocity kept on a wall bounce (<1 sheds energy)
+const float kVMax         = 24000.0f;// velocity-magnitude clamp — integration-stability safety
 // -----------------------------------------------------------------------------------------
 
 Gui gui;
@@ -78,6 +103,16 @@ inline int analogFrameForAudio(BelaContext *ctx, int audioFrame) {
 inline float dist2(const Player &a, const Player &b) {
 	float dx = a.x - b.x, dy = a.y - b.y;
 	return sqrtf(dx*dx + dy*dy);
+}
+
+// Steer with a tangential blend: rotate the unit radial direction (ux,uy) toward its
+// 90° (CCW) tangent by kTangential, renormalize to keep the thrust magnitude = mag, and
+// write the result into (ax,ay). Straight chase/flee when kTangential = 0; orbiting above.
+inline void steerTangential(float &ax, float &ay, float ux, float uy, float mag) {
+	float dx = ux + kTangential * (-uy);   // tangent = (-uy, ux)
+	float dy = uy + kTangential * ( ux);
+	float dl = sqrtf(dx*dx + dy*dy);
+	if(dl > 1e-6f) { ax = mag * dx / dl; ay = mag * dy / dl; }
 }
 
 void resetPositions() {
@@ -162,8 +197,8 @@ void render(BelaContext *context, void *userData) {
 	for(int i = 0; i < NUM_PLAYERS; i++) {
 		float s = speedCv[i];
 		if(s < 0.0f) s = 0.0f; else if(s > 1.0f) s = 1.0f;
-		speed[i] = s * kMaxSpeed;
-		gSpeedEff[i] = s;  // normalized effective speed, for the GUI meter
+		speed[i] = kSpeedMin * powf(kSpeedMax / kSpeedMin, s);  // exponential: LFO → audio rate
+		gSpeedEff[i] = s;  // normalized effective speed (knob position), for the GUI meter
 	}
 	float d = dampingCv;
 	if(d < 0.0f) d = 0.0f; else if(d > 1.0f) d = 1.0f;
@@ -226,26 +261,63 @@ void render(BelaContext *context, void *userData) {
 				float ax = 0.0f, ay = 0.0f;
 
 				if(i == gIT && target >= 0) {
+					// Direct pursuit — no tangential, so IT keeps closing in and tagging
+					// (the tag/role-swap is what perturbs the system out of limit cycles).
 					float dx = gPlayers[target].x - gPlayers[i].x;
 					float dy = gPlayers[target].y - gPlayers[i].y;
 					float d  = sqrtf(dx*dx + dy*dy);
 					if(d > 1e-4f) { ax = speed[i] * dx/d; ay = speed[i] * dy/d; }
 				} else if(i != gIT) {
-					// Flee directly away from IT's current position.
+					// Flee IT, curving around it rather than straight away (tangential blend).
 					float dx = gPlayers[i].x - gPlayers[gIT].x;
 					float dy = gPlayers[i].y - gPlayers[gIT].y;
 					float d  = sqrtf(dx*dx + dy*dy);
-					if(d > 1e-4f) { ax = speed[i] * dx/d; ay = speed[i] * dy/d; }
+					if(d > 1e-4f) steerTangential(ax, ay, dx/d, dy/d, speed[i]);
 				}
 
 				// Viscous damping.
 				ax -= damping * gPlayers[i].vx;
 				ay -= damping * gPlayers[i].vy;
 
+				// Boundary containment gradient — inward radial force that ramps up as r
+				// approaches r_max, so fleeing players orbit inside the boundary instead of
+				// running straight to the wall.
+				float r = sqrtf(gPlayers[i].x*gPlayers[i].x + gPlayers[i].y*gPlayers[i].y);
+				if(r > kRMax * kWallStart && r > 1e-4f) {
+					float g = (r / kRMax - kWallStart) / (1.0f - kWallStart); // 0 at start → 1 at r_max
+					float wallF = kWallStrength * g * g;                       // steep near the edge
+					ax -= wallF * gPlayers[i].x / r;
+					ay -= wallF * gPlayers[i].y / r;
+				}
+
 				gPlayers[i].vx += ax * dt;
 				gPlayers[i].vy += ay * dt;
+
+				// Velocity-magnitude clamp — keeps the explicit integrator stable at
+				// audio-rate speeds (bounds per-sample displacement).
+				float v2 = gPlayers[i].vx*gPlayers[i].vx + gPlayers[i].vy*gPlayers[i].vy;
+				if(v2 > kVMax*kVMax) {
+					float vs = kVMax / sqrtf(v2);
+					gPlayers[i].vx *= vs; gPlayers[i].vy *= vs;
+				}
+
 				gPlayers[i].x  += gPlayers[i].vx * dt;
 				gPlayers[i].y  += gPlayers[i].vy * dt;
+
+				// Reflecting boundary — bounce off r_max at any speed. Project back onto
+				// the circle and invert the outward radial velocity (scaled by restitution),
+				// keeping the tangential component. Contained without huge forces or resets.
+				r = sqrtf(gPlayers[i].x*gPlayers[i].x + gPlayers[i].y*gPlayers[i].y);
+				if(r > kRMax) {
+					float nx = gPlayers[i].x / r, ny = gPlayers[i].y / r;
+					gPlayers[i].x = nx * kRMax;
+					gPlayers[i].y = ny * kRMax;
+					float vr = gPlayers[i].vx*nx + gPlayers[i].vy*ny;   // outward radial velocity
+					if(vr > 0.0f) {
+						gPlayers[i].vx -= (1.0f + kRestitution) * vr * nx;
+						gPlayers[i].vy -= (1.0f + kRestitution) * vr * ny;
+					}
+				}
 			}
 
 			// -- Tag detection (post-physics positions) --------------------------------
@@ -278,12 +350,9 @@ void render(BelaContext *context, void *userData) {
 			digitalWrite(context, frame, DIGITAL_WALL2,   wallHit[1] ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_WALL3,   wallHit[2] ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_WALLANY, anyWall ? 1 : 0);
-
-			// Hard boundary: a wall hit respawns all players (IT preserved — same as a
-			// RESET pulse). Replaces the old soft-wall spring; the boundary is now a
-			// respawn trigger, not a containment force. Done after the WALL gate writes
-			// so the crossing still fires a one-frame WALL pulse before the respawn.
-			if(anyWall) resetPositions();
+			// Boundary is now handled by reflection in the physics step (players bounce off
+			// r_max), so no auto-reset here. WALL gates pulse once per bounce; RESET is
+			// manual only (the RESET pin). r never exceeds r_max, so wallHit marks contact.
 		}
 
 		// -- Compute and write r/θ outputs (both frozen and live paths) ---------------
