@@ -18,9 +18,9 @@
 // ── Outputs — DC-coupled AUDIO outs on the Gem Multi (written with audioWrite,
 //    NOT analogWrite). Audio outs 2–9 are the DC-coupled ones; we use 2–7 for the
 //    six voices, matching turbine. Confirm these channels against the panel wiring.
-#define AUDIO_OUT_SINE    2   // PM'd master carrier: sin(2pi*phi_m + PM)
-#define AUDIO_OUT_COSINE  3   // PM'd master carrier: cos(2pi*phi_m + PM)
-#define AUDIO_OUT_SINE_A  4   // sin(2pi*phi_A) — rotated sub A modulator, exposed
+#define AUDIO_OUT_SINE    3   // PM'd master carrier: sin(2pi*phi_m + PM)
+#define AUDIO_OUT_COSINE  4   // PM'd master carrier: cos(2pi*phi_m + PM)
+#define AUDIO_OUT_SINE_A  2   // sin(2pi*phi_A) — rotated sub A modulator, exposed
 #define AUDIO_OUT_SINE_B  5   // sin(2pi*phi_B)
 #define AUDIO_OUT_RAMP_A  6   // phi_A — rotated sub ramp (raster source)
 #define AUDIO_OUT_RAMP_B  7   // phi_B
