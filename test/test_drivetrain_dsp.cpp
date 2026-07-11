@@ -150,6 +150,64 @@ static void test_sternbrocot_persistence() {
 	CHECK(gT.node(sel74).p == 7 && gT.node(sel74).q == 4);
 }
 
+static bool smooth7(int n) {
+	for (int p = 2; p <= 7; ++p) while (n % p == 0) n /= p;
+	return n == 1;
+}
+
+static int findRatioIn(const SternBrocotTable<8192> &t, int p, int q) {
+	for (int i = 0; i < t.count(); ++i)
+		if (t.node(i).p == p && t.node(i).q == q) return i;
+	return -1;
+}
+
+static void test_sternbrocot_primelimit() {
+	// 7-limit: every admitted ratio's p and q factor into primes <= 7; nothing with an
+	// 11/13/... factor is admitted, but 7-limit ratios still are, and 1/1 is always in.
+	SternBrocotTable<8192> t;
+	t.build(0.25f, 4.0f, 12, 7);
+	CHECK(t.count() > 0);
+	bool has11 = false, has13 = false, has74 = false, has75 = false, has11_ratio = false;
+	for (int i = 0; i < t.count(); ++i) {
+		const SBNode &n = t.node(i);
+		CHECK(smooth7(n.p) && smooth7(n.q));   // core invariant
+		if (n.p == 7 && n.q == 4) has74 = true;
+		if (n.p == 7 && n.q == 5) has75 = true;
+		if (n.p == 11 || n.q == 11) has11 = true;
+		if (n.p == 13 || n.q == 13) has13 = true;
+		if (n.p == 11 && n.q == 8)  has11_ratio = true;
+	}
+	CHECK(has74 && has75);                 // 7-limit ratios present
+	CHECK(!has11 && !has13 && !has11_ratio); // 11/13-limit excluded (11/8 would be depth 4 unfiltered)
+
+	// Filtering never admits more than the unfiltered tree, and still includes 1/1.
+	SternBrocotTable<8192> tAll;
+	tAll.build(0.25f, 4.0f, 12);
+	CHECK(t.count() < tAll.count());
+	CHECK(findRatioIn(t, 1, 1) >= 0);
+}
+
+static int oddPart(int n) { while ((n & 1) == 0) n >>= 1; return n; }
+
+static void test_sternbrocot_oddlimit() {
+	// 9-odd-limit, 7-prime-limit (the drivetrain lattice): every ratio's odd parts are
+	// <= 9, 9/8 is admitted (it's tree-depth 9, so a depth ceiling would miss it), and
+	// higher odd-limit ratios like 15/8 are excluded.
+	SternBrocotTable<8192> t;
+	t.build(0.25f, 4.0f, 14, 7, 9);
+	CHECK(t.count() > 0);
+	for (int i = 0; i < t.count(); ++i) {
+		const SBNode &n = t.node(i);
+		CHECK(oddPart(n.p) <= 9 && oddPart(n.q) <= 9);
+		CHECK(smooth7(n.p) && smooth7(n.q));
+	}
+	CHECK(findRatioIn(t, 9, 8) >= 0);    // the one we came for
+	CHECK(findRatioIn(t, 10, 9) >= 0);   // 9-odd-limit neighbours
+	CHECK(findRatioIn(t, 8, 7) >= 0);
+	CHECK(findRatioIn(t, 15, 8) < 0);    // odd-limit 15 — excluded
+	CHECK(findRatioIn(t, 1, 1) >= 0);
+}
+
 int main() {
 	test_cycledivide_continuity();
 	test_cycledivide_exact_period();
@@ -157,6 +215,8 @@ int main() {
 	test_sternbrocot_structure();
 	test_sternbrocot_nesting();
 	test_sternbrocot_persistence();
+	test_sternbrocot_primelimit();
+	test_sternbrocot_oddlimit();
 	printf("test_drivetrain_dsp: %d checks passed\n", gChecks);
 	return 0;
 }

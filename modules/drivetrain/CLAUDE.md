@@ -15,6 +15,23 @@ computed gearing**, not a PLL: no slip, no settling.
 
 Single Bela Gem Multi. 8 analog in / 6 analog out (2 spare). 2 digital in.
 
+## Current build deviations from the spec below
+- **Outputs use `audioWrite` to DC-coupled audio outs 2–7**, not `analogWrite` (see Bela
+  notes). `pins.h` analog-in channels were hand-mapped to the panel wiring.
+- **The JI lattice is fixed at 9-odd-limit / 7-prime-limit** (`kOddLimit = 9`,
+  `kPrimeLimit = 7`, passed to `gTable.build`) — 77 ratios over [0.25, 4],
+  the 9-odd-limit tonality diamond (includes 9/8, 10/9, 8/7, 7/6, 6/5, 9/7, 9/5, 16/9…).
+  Odd-limit (not tree depth) gates density, because tree depth over-penalizes near-unison
+  ratios — 9/8 is tree-depth 9. The table is built to depth `D_MAX = 14` so the limits, not
+  depth, do the gating. Replaces the spec's "no prime-limit control" note. `lib/dsp/
+  sternbrocot.h` gained optional `primeLimit` and `oddLimit` args.
+- **The COMPLEXITY input (`AN_IN_FUND_NULL`) now drives a fundamental-null control**, not
+  depth. It sets `gFundNull ∈ [0,1]` = the depth of a **steep notch (RBJ, Q=`kNotchQ`)
+  tracking f_master**, blended onto SINE/COSINE (0 = dry, 1 = full notch). The notch runs
+  every sample to stay warm; coeffs recompute per block as TUNE moves. Chosen over the
+  earlier J0-subtraction (which couldn't handle subharmonic ratios). Trade-off: it also
+  dents sidebands within ~f_master/Q of the fundamental. `Biquad` is a local struct.
+
 ## Where the code lives
 - `render.cpp` — the Bela loop: control-rate CV reads, the master phase engine,
   per-sample sub reconstruction + PM, output writes, display meters. Module-specific

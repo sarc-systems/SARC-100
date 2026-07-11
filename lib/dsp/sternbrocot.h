@@ -24,13 +24,39 @@ struct SBNode {
 	int   depth;
 };
 
+// True if every prime factor of n is <= primeLimit (n is "primeLimit-smooth").
+// Dividing by composite p is harmless — their prime factors are already divided out.
+static inline bool sbSmooth(int n, int primeLimit) {
+	if(n <= 0) return false;
+	for(int p = 2; p <= primeLimit; ++p)
+		while(n % p == 0) n /= p;
+	return n == 1;
+}
+
+// Odd part of n (n with all factors of 2 removed). The odd-limit of a ratio p/q is
+// max(sbOddPart(p), sbOddPart(q)) — the standard JI complexity measure (unlike tree
+// depth, it rates small simple intervals like 9/8 as simple).
+static inline int sbOddPart(int n) {
+	if(n <= 0) return n;
+	while((n & 1) == 0) n >>= 1;
+	return n;
+}
+
 template <int MAXN>
 class SternBrocotTable {
 public:
-	void build(float rMin, float rMax, int maxDepth) {
+	// Admission filters (0 = disabled):
+	//   primeLimit > 0 -> p-limit JI: p and q factor into primes <= primeLimit (7 -> 7-limit)
+	//   oddLimit   > 0 -> odd-limit JI: max(oddPart(p), oddPart(q)) <= oddLimit (9 admits 9/8)
+	// Both may be combined. maxDepth must be large enough to REACH the wanted ratios in the
+	// tree even though they're admitted by limit, not depth (e.g. 9/8 is at tree depth 9).
+	// Recursion still descends through rejected nodes; only table admission is gated.
+	void build(float rMin, float rMax, int maxDepth, int primeLimit = 0, int oddLimit = 0) {
 		n_ = 0;
 		rMin_ = rMin;
 		rMax_ = rMax;
+		primeLimit_ = primeLimit;
+		oddLimit_ = oddLimit;
 		// Root interval (0/1, 1/0); mediant 1/1 sits at depth 1.
 		recurse(0, 1, 1, 0, 1, maxDepth);
 	}
@@ -70,7 +96,9 @@ private:
 		// Left subtree covers values < val; skip it entirely if none reach rMin.
 		if(val > rMin_) recurse(a, b, (int)p, (int)q, depth + 1, maxDepth);
 
-		if(val >= rMin_ && val <= rMax_ && n_ < MAXN) {
+		if(val >= rMin_ && val <= rMax_ && n_ < MAXN
+		   && (primeLimit_ <= 0 || (sbSmooth((int)p, primeLimit_) && sbSmooth((int)q, primeLimit_)))
+		   && (oddLimit_   <= 0 || (sbOddPart((int)p) <= oddLimit_ && sbOddPart((int)q) <= oddLimit_))) {
 			nodes_[n_].value    = val;
 			nodes_[n_].logValue = logf(val);
 			nodes_[n_].p        = (int)p;
@@ -84,7 +112,9 @@ private:
 	}
 
 	SBNode nodes_[MAXN];
-	int    n_    = 0;
-	float  rMin_ = 0.0f;
-	float  rMax_ = 0.0f;
+	int    n_          = 0;
+	float  rMin_       = 0.0f;
+	float  rMax_       = 0.0f;
+	int    primeLimit_ = 0;
+	int    oddLimit_   = 0;
 };

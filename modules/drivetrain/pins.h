@@ -9,7 +9,8 @@
 #define AN_IN_TUNE        5   // master frequency (exp)
 #define AN_IN_RATIO_A     4   // sub A rational ratio (Stern-Brocot value axis)
 #define AN_IN_RATIO_B     7   // sub B rational ratio
-#define AN_IN_COMPLEXITY  6   // Stern-Brocot max depth (bias+atten do limit-shaping)
+#define AN_IN_FUND_NULL   6   // fundamental (carrier) null amount [0,1]  (was COMPLEXITY;
+                              //   the JI lattice is now fixed 9-odd-limit / 7-prime in render.cpp)
 #define AN_IN_PM_DEPTH    1   // total PM index (exp)
 #define AN_IN_PM_BALANCE  2   // A/B modulator split (bipolar, encoded [0,1])
 #define AN_IN_PHASE_A     0   // sub A phase offset (static)
