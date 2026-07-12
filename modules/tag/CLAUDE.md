@@ -1,208 +1,189 @@
-# TAG — Module Specification
+# TAG — Module Guide
 ## SARC-100 / Serge Low-Gain Format / Bela Gem Multi
+
+This began as a pre-build spec; it now documents the **implemented** module. Physics, I/O,
+and parameters below match `render.cpp` / `pins.h` as built. Design intent (concept, game
+rules, patch ideas) is preserved.
 
 ---
 
 ## Concept
 
-Three agents move in a bounded 2D space under simple physics. One agent is always IT. IT chases its nearest eligible neighbor; non-IT agents flee IT. When IT closes to within catch radius of an eligible target, a tag occurs: the target becomes the new IT, the old IT becomes non-IT. The three position outputs are coupled, non-linear, continuously evolving CVs — at high damping they behave like sluggish interdependent envelopes; at low damping they oscillate and overshoot. The game state (who is IT) determines the coupling topology.
+Three agents move in a bounded 2D disc under simple Newtonian physics. One agent is always
+IT. IT chases its nearest eligible neighbor; non-IT agents flee IT. When IT closes within
+the catch radius, a **tag** transfers IT to that agent. The three position outputs are
+coupled, non-linear, continuously evolving CVs. Because SPEED now spans slow-LFO to
+**audio rate**, those outputs work as modulation sources *or* audio oscillators.
 
-The module is not a random source. Its outputs are deterministic given initial conditions, but sensitive to parameter changes, gate inputs, and patched feedback from the rest of the system.
+Deterministic given initial conditions, but sensitive to parameters, gates, and patched
+feedback. Not a random source.
 
 ---
 
 ## Game Rules
 
-**Tag transfer**: IT player accelerates toward nearest eligible non-IT player. When distance drops below hardcoded catch radius, that player becomes IT. Old IT immediately becomes non-IT.
-
-**No-tag-backs**: Newly tagged IT may not target the player who just tagged them until that player has retreated to a distance greater than or equal to the current distance to the third player. No panel control — threshold is determined dynamically by the three-body geometry.
-
-**IT on startup**: Player 1 is IT at cold start. IT state persists through RESET — last IT before reset remains IT after reset.
-
-**Boundary**: Soft wall at r_max (hardcoded). Spring-like restoring force activates as player approaches boundary. WALL HIT gate fires when a player reaches r_max. No hardwired behavior on wall hit — patch WALL HIT → RESET or leave unpatched as desired.
-
----
-
-## Physics
-
-Each player maintains:
-- Position: (x, y) in normalized 2D space, center at origin
-- Velocity: (vx, vy)
-
-Each tick:
-1. Compute target direction (toward nearest eligible neighbor for IT; away from IT for non-IT)
-2. Apply acceleration in target direction, scaled by SPEED
-3. Apply damping force opposing velocity, scaled by DAMPING
-4. Apply soft-wall restoring force if approaching r_max
-5. Integrate velocity → position
-
-Output r = sqrt(x² + y²), normalized 0 to +V  
-Output θ = atan2(y, x), normalized 0 to +V over -π to +π
+- **Tag transfer**: IT accelerates toward the nearest eligible non-IT player; when distance
+  drops below `kCatchRadius`, that player becomes IT and the old IT becomes non-IT.
+- **No-tag-backs**: a newly tagged IT may not target the player who just tagged them until
+  that player has retreated to ≥ the current distance to the third player. Dynamic,
+  three-body geometry; no panel control.
+- **IT on startup**: Player 1 is IT at cold start. IT state persists through RESET.
+- **Boundary**: a **reflecting** wall at `r_max` — players bounce off it (elastic, with
+  restitution), backed by a soft containment gradient in the interior shell. No reset on
+  contact; RESET is manual only. (This replaced the earlier soft-wall-spring + WALL-HIT +
+  reset-on-wall scheme.)
 
 ---
 
-## Hardcoded Parameters
+## Physics (as implemented)
 
-| Parameter | Value | Notes |
-|---|---|---|
-| Catch radius | TBD | Distance threshold for tag transfer |
-| r_max | TBD | Boundary radius |
-| No-tag-backs threshold | Distance to 3rd player | Dynamically determined |
+Per player, per audio sample — semi-implicit (symplectic) Euler, unit mass. "Speed" is an
+acceleration magnitude, not a velocity.
+
+1. **Steering** (constant-magnitude thrust, magnitude = SPEED accel):
+   - **IT**: direct pursuit — unit vector straight toward the target. (No tangential term,
+     so IT keeps closing and tagging; the tag/role-swap is what perturbs the system out of
+     limit cycles.)
+   - **Non-IT**: flee IT, with a **tangential (orbit) blend** `kTangential` rotating the
+     flee direction toward the perpendicular so fleers curve *around* IT instead of running
+     straight to the wall and pinning. Flee-only.
+2. **Viscous damping**: `a -= DAMPING · v` (linear drag; the dissipation term).
+3. **Containment gradient**: inward radial force, zero inside `kWallStart·r_max`, ramping
+   ∝ g² to `kWallStrength` at `r_max`. Holds low-SPEED players in soft orbits; high-SPEED
+   players overpower it and reach the reflecting wall. So SPEED sweeps smoothly from soft
+   orbits → hard audio-rate bouncing.
+4. **Integrate velocity**, then **clamp** its magnitude to `kVMax` (integration stability).
+5. **Integrate position**.
+6. **Reflecting boundary**: if `r > r_max`, project back onto the circle and invert the
+   outward radial velocity (× `kRestitution`, keeping the tangential component). Contains at
+   any speed without huge forces.
+
+**Momentum**: yes — velocity is persistent state; players coast and carry inertia.
+**Overshoot**: yes — constant-magnitude steering means IT sails *past* its target and
+orbits rather than settling; `DAMPING` is the overshoot control (low = underdamped,
+oscillatory; high = overdamped, envelope-like).
+
+### Outputs per player (2 channels), polar or cartesian per the POLAR/CART switch
+- **Polar** (switch low): `r = |pos| / r_max` clamped [0,1]; `θ = atan2(y,x)` mapped [0,1]
+  over [−π,π]. θ is a phasor — it wraps 0↔1 at the −x axis (topologically unavoidable for a
+  single-CV angle; reads as a sawtooth when a player circulates).
+- **Cartesian** (switch high): `x, y ∈ [−1,1]` mapped to `0.5 + 0.5·(x|y)`.
+- GUI meters always show polar regardless of the switch (fixed slider labels).
 
 ---
 
-## Analog I/O
+## Parameters (`render.cpp` constants)
 
-### Outputs (6 jacks across 3 player columns)
-
-| Jack | Signal | Range |
+| Constant | Value | Meaning |
 |---|---|---|
-| P1 r | Player 1 radial distance from origin | 0 to +V |
-| P1 θ | Player 1 angular position | 0 to +V |
-| P2 r | Player 2 radial distance | 0 to +V |
-| P2 θ | Player 2 angular position | 0 to +V |
-| P3 r | Player 3 radial distance | 0 to +V |
-| P3 θ | Player 3 angular position | 0 to +V |
+| `kRMax` | 1.0 | boundary radius |
+| `kRStart` | 0.5 | spawn radius (players 120° apart) |
+| `kCatchRadius` | 0.15 | tag distance threshold |
+| `kSpeedMin` / `kSpeedMax` | 0.5 / 6000 | SPEED CV → accel, **exponential** (LFO → audio rate) |
+| `kMaxDamping` | 2.5 | DAMPING CV → drag, linear |
+| `kTangential` | 0.15 | flee orbit amount (flee-only; 0 = pure radial) |
+| `kWallStart` / `kWallStrength` | 0.75 / 60 | containment-gradient onset / strength |
+| `kRestitution` | 0.8 | radial velocity kept on a wall bounce (<1 sheds energy) |
+| `kVMax` | 24000 | velocity-magnitude clamp (stability) |
 
-### Inputs (12 jacks across 3 player columns + global column)
+---
 
-| Jack | Function | Notes |
-|---|---|---|
-| P1 SPEED in | CV for Player 1 speed | Scaled by attenuverter, summed with bias |
-| P2 SPEED in | CV for Player 2 speed | |
-| P3 SPEED in | CV for Player 3 speed | |
-| DAMPING in | CV for global damping | Scaled by attenuverter, summed with bias |
+## Controls — CV only
 
-### Panel Pots
+No GUI control sliders and no in-code bias: each analog input is a single smoothed CV read.
+The hardware front-end sums each input's **att + bias pots** into the CV before the ADC (the
+established SARC convention), so the panel still has those knobs — they just don't appear in
+code. The GUI shows **display-only** meters (Speed eff ×3, Damping eff, r eff / θ eff ×3, IT).
 
-| Pot | Function |
+---
+
+## Analog I/O (`pins.h`)
+
+CV inputs (per-player SPEED + global DAMPING):
+
+| Signal | Analog in |
 |---|---|
-| P1 SPEED att | Attenuverter for P1 SPEED CV |
-| P1 SPEED bias | Pull-pot, sets resting speed for P1 |
-| P2 SPEED att | Attenuverter for P2 SPEED CV |
-| P2 SPEED bias | Pull-pot, sets resting speed for P2 |
-| P3 SPEED att | Attenuverter for P3 SPEED CV |
-| P3 SPEED bias | Pull-pot, sets resting speed for P3 |
-| DAMPING att | Attenuverter for DAMPING CV |
-| DAMPING bias | Pull-pot, sets resting damping |
+| DAMPING | A0 |
+| P1 SPEED | A1 |
+| P2 SPEED | A2 |
+| P3 SPEED | A3 |
+
+Outputs — DC-coupled audio outs (bipolar via the output stage). Channel A carries **r** (or
+**x** in cartesian); channel B carries **θ** (or **y**):
+
+| Player | A (r/x) | B (θ/y) |
+|---|---|---|
+| P1 | 2 | 5 |
+| P2 | 3 | 6 |
+| P3 | 4 | 7 |
 
 ---
 
-## Digital I/O (Bela GPIO)
+## Digital I/O (`pins.h`)
 
 ### Outputs
-
 | Pin | Signal | Type | Notes |
 |---|---|---|---|
-| — | IT 1 | Gate | High while Player 1 is IT |
-| — | IT 2 | Gate | High while Player 2 is IT |
-| — | IT 3 | Gate | High while Player 3 is IT |
-| — | TAG EVENT | Trigger | Fires on each IT transfer |
-| — | WALL HIT 1 | Gate | High while Player 1 r >= r_max |
-| — | WALL HIT 2 | Gate | High while Player 2 r >= r_max |
-| — | WALL HIT 3 | Gate | High while Player 3 r >= r_max |
-| — | ANY WALL HIT | Gate | Aggregate of WALL HIT 1/2/3 |
+| 0 | TAG EVENT | Trigger | fires on each IT transfer |
+| 1 | IT 1 | Gate | high while Player 1 is IT |
+| 2 | IT 2 | Gate | high while Player 2 is IT |
+| 3 | IT 3 | Gate | high while Player 3 is IT (redundant = NOT(IT1∨IT2), for patching) |
 
 ### Inputs
-
 | Pin | Signal | Type | Notes |
 |---|---|---|---|
-| — | RESET | Gate | Reinitializes all positions; preserves IT state |
-| — | FREEZE | Gate | Pauses physics while high; preserves all state |
+| 8 | RESET | Trigger | rising edge reinitializes positions; preserves IT state |
+| 9 | FREEZE | Gate | zeroes velocities + holds positions while high (instant sample-hold of the output CVs) |
+| 4 | POLAR/CART | Switch | high = cartesian (x,y); low = polar (r,θ) |
+
+The IT gates are mutually exclusive — exactly one is always high.
 
 ---
 
-## Panel Layout — 4 Columns × 8 = 32 Slots
+## Panel Layout (condensing to 3 player columns + global)
 
-### Column 1 — Player 1
-1. r out
-2. θ out
-3. IT gate out
-4. WALL HIT out
-5. SPEED in
-6. SPEED att (knob)
-7. SPEED bias (knob)
-8. *(spare)*
-
-### Column 2 — Player 2
-1. r out
-2. θ out
-3. IT gate out
-4. WALL HIT out
-5. SPEED in
-6. SPEED att (knob)
-7. SPEED bias (knob)
-8. *(spare)*
-
-### Column 3 — Player 3
-1. r out
-2. θ out
-3. IT gate out
-4. WALL HIT out
-5. SPEED in
-6. SPEED att (knob)
-7. SPEED bias (knob)
-8. *(spare)*
-
-### Column 4 — Global
-1. TAG EVENT out *(with LED)*
-2. ANY WALL HIT out
-3. DAMPING in
-4. DAMPING att (knob)
-5. DAMPING bias (knob)
-6. FREEZE in
-7. RESET in
-8. *(spare)*
+WALL-HIT outputs are gone (4 slots freed). Per-player column: **r out, θ out, IT out,
+SPEED in, SPEED att, SPEED bias**. Global column: **TAG out (+LED), DAMPING in, DAMPING att,
+DAMPING bias, FREEZE, RESET, POLAR/CART switch**. Exact physical arrangement is being
+finalized on the panel; this is the element inventory.
 
 ---
 
 ## Patch Examples
 
-**Tag resets winner to center**  
-WALL HIT 1 → RESET (via external logic selecting P1 RESET — or global RESET if full reset is acceptable)
-
-**Score tracking**  
-WALL HIT 1 → integrator 1 input  
-WALL HIT 2 → integrator 2 input  
-WALL HIT 3 → integrator 3 input  
-Integrator outputs accumulate a score voltage per player
-
-**Score feeds back into speed**  
-Integrator 1 out → P1 SPEED in (high score → faster)
-
-**Poisson stimulation (external)**  
-External Poisson gate → RESET or into player SPEED CV to perturb dynamics
-
-**Coupled filter sweep**  
-P1 r → filter 1 cutoff  
-P2 r → filter 2 cutoff  
-P3 r → filter 3 cutoff  
-Three coupled envelopes driving spectral content
-
-**Freeze on network instability**  
-External limiter gate → FREEZE (hold game state while feedback network stabilizes)
+- **Coupled filter sweep**: P1 r → filter 1 cutoff, P2 r → filter 2, P3 r → filter 3 — three
+  coupled envelopes (low SPEED) or three detuned oscillators (high SPEED).
+- **θ as phasors**: P_n θ → anything wanting a rotating ramp; at audio rate they're
+  saw-like tones.
+- **Rhythm from tags**: TAG EVENT → clock/trigger; IT gates → route/gate three voices by
+  who's IT.
+- **Perturb the dynamics**: external gate → RESET, or → a SPEED CV, to kick the system.
+- **Freeze on instability**: external limiter/envelope gate → FREEZE to hold game state.
+- **Cartesian for scanning**: flip POLAR/CART for (x,y) — e.g. drive an X/Y scope or a 2D
+  wavetable position.
 
 ---
 
-## Implementation Notes
+## Implementation Notes / Gotchas
 
-- Coordinate system: normalized, center at origin, r_max defines boundary
-- Physics update rate: audio rate or control rate TBD during Bela prototype
-- No-tag-backs state: single flag per player, cleared when tagger distance ≥ 3rd player distance
-- WALL HIT is a gate: high while r >= r_max, low while r < r_max. Position tracks freely beyond r_max (soft-wall spring provides the restoring force); the r output is clamped to 1.0 for the CV out, but the underlying position is not clamped
-- TAG EVENT fires as a trigger on IT transfer, not continuous
-- IT gates are level outputs (high while IT, low otherwise)
-- All three IT gates are mutually exclusive; exactly one is always high
-- IT 3 is redundant (IT3 = NOT(IT1 OR IT2)) but provided for patching convenience
-- DAMPING: high value = overdamped (smooth, envelope-like); low value = underdamped (oscillatory, wiggly)
-- FREEZE input: while high, all velocities and accelerations set to zero; positions held
-- RESET: rising edge reinitializes positions to starting configuration (TBD — equally spaced at r_start, or all at center); IT state preserved
+- Physics runs at **audio rate** (per-sample); outputs update every sample.
+- Boundary is reflection, **not** reset — don't reintroduce reset-on-wall (it caused the
+  respawn-loop the reflection fixed).
+- SPEED is **exponential**; the bottom of the knob crawls, the top reaches audio rate. It
+  never reaches true zero (exp floors at `kSpeedMin`), so FREEZE is the only true stop/hold.
+- Keep `kTangential` on **flee only** — adding it to IT's chase lets IT circle instead of
+  tagging, and the loss of tags collapses the system into limit cycles.
+- The θ output has an unavoidable 0↔+V wrap (single-CV angle). Use cartesian if you need
+  jump-free position.
+- Tag detection is a per-sample proximity test; at very high SPEED players can skip past
+  each other between samples and miss a tag. Acceptable for now; revisit if it bites.
 
 ---
 
-## Open Questions
+## Open Questions / TODO
 
-- Starting positions on RESET: equally spaced on a circle at r_start, or all at origin?
-- r_max and catch radius values: set during Bela prototype tuning
-- Physics update rate: audio rate vs. lower control rate
-- 4 spare panel slots (1 per column): reserved for noise source or future expansion
+- Expose `kTangential` (orbit amount) on a spare analog input as a live "orbit" knob?
+- Optional trade: bottom-of-SPEED dead-zone → true stop, to free the FREEZE jack
+  (deferred — FREEZE retained for instant sample-hold at any speed).
+- Anti-alias the θ phasor wrap / r bounce at the top of the audio-rate range if it's harsh.
+- Per-player mass or inter-player collisions (richer physics) — not modeled.

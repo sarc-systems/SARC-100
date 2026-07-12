@@ -23,15 +23,12 @@
 #define AUDIO_OUT_P3_T 7
 
 // Digital in
-#define DIGITAL_RESET  8
-#define DIGITAL_FREEZE 9
+#define DIGITAL_RESET      8
+#define DIGITAL_FREEZE     9
+#define DIGITAL_CARTESIAN  4   // switch: high = cartesian (x,y) outputs, low = polar (r,θ)
 
-// Digital out — IT gates (level), triggers (single-sample)
+// Digital out — IT gates (level), tag trigger (single-sample)
 #define DIGITAL_IT1      1
 #define DIGITAL_IT2      2
 #define DIGITAL_IT3      3
 #define DIGITAL_TAG      0
-#define DIGITAL_WALL1    5
-#define DIGITAL_WALL2    6
-#define DIGITAL_WALL3    7
-#define DIGITAL_WALLANY  4

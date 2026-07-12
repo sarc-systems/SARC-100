@@ -167,8 +167,8 @@ bool setup(BelaContext *context, void *userData) {
 
 	pinMode(context, 0, DIGITAL_RESET, INPUT);
 	pinMode(context, 0, DIGITAL_FREEZE, INPUT);
-	for(int pin : {DIGITAL_IT1, DIGITAL_IT2, DIGITAL_IT3, DIGITAL_TAG,
-	               DIGITAL_WALL1, DIGITAL_WALL2, DIGITAL_WALL3, DIGITAL_WALLANY}) {
+	pinMode(context, 0, DIGITAL_CARTESIAN, INPUT);
+	for(int pin : {DIGITAL_IT1, DIGITAL_IT2, DIGITAL_IT3, DIGITAL_TAG}) {
 		pinMode(context, 0, pin, OUTPUT);
 	}
 
@@ -210,6 +210,7 @@ void render(BelaContext *context, void *userData) {
 		// Digital reads — sample-accurate (same-frame SYNC/FREEZE ordering per CLAUDE.md).
 		int resetPin  = digitalRead(context, frame, DIGITAL_RESET);
 		int freezePin = digitalRead(context, frame, DIGITAL_FREEZE);
+		int cartesian = digitalRead(context, frame, DIGITAL_CARTESIAN);  // output-mode switch
 
 		// RESET (rising edge) — reinitializes positions, preserves IT state.
 		if(resetPin && !gResetPrev) resetPositions();
@@ -332,42 +333,41 @@ void render(BelaContext *context, void *userData) {
 				}
 			}
 
-			// -- Wall gate: high while r >= r_max (position tracked freely beyond boundary,
-			// r output is clamped to 1.0, gate is the raw level comparison) --------------
-			bool wallHit[NUM_PLAYERS] = {false, false, false};
-			for(int i = 0; i < NUM_PLAYERS; i++) {
-				float r = sqrtf(gPlayers[i].x*gPlayers[i].x + gPlayers[i].y*gPlayers[i].y);
-				wallHit[i] = (r >= kRMax);
-			}
-			bool anyWall = wallHit[0] || wallHit[1] || wallHit[2];
-
-			// -- Write digital outs ---------------------------------------------------
+			// -- Write digital outs (IT gates + tag trigger) --------------------------
+			// Boundary is handled by reflection in the physics step (players bounce off
+			// r_max), so no wall gates and no auto-reset. RESET is manual (the RESET pin).
 			digitalWrite(context, frame, DIGITAL_IT1, gIT == 0 ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_IT2, gIT == 1 ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_IT3, gIT == 2 ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_TAG,     tagEventThisFrame ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_WALL1,   wallHit[0] ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_WALL2,   wallHit[1] ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_WALL3,   wallHit[2] ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_WALLANY, anyWall ? 1 : 0);
-			// Boundary is now handled by reflection in the physics step (players bounce off
-			// r_max), so no auto-reset here. WALL gates pulse once per bounce; RESET is
-			// manual only (the RESET pin). r never exceeds r_max, so wallHit marks contact.
+			digitalWrite(context, frame, DIGITAL_TAG, tagEventThisFrame ? 1 : 0);
 		}
 
-		// -- Compute and write r/θ outputs (both frozen and live paths) ---------------
-		const unsigned int audioOutR[NUM_PLAYERS] = {AUDIO_OUT_P1_R, AUDIO_OUT_P2_R, AUDIO_OUT_P3_R};
-		const unsigned int audioOutT[NUM_PLAYERS] = {AUDIO_OUT_P1_T, AUDIO_OUT_P2_T, AUDIO_OUT_P3_T};
+		// -- Compute and write outputs (both frozen and live paths) -------------------
+		// Two channels per player. Polar: (r, θ). Cartesian (switch high): (x, y) mapped
+		// from [-1,1] to [0,1] for the DC output stage. The GUI meters always show polar.
+		const unsigned int audioOutA[NUM_PLAYERS] = {AUDIO_OUT_P1_R, AUDIO_OUT_P2_R, AUDIO_OUT_P3_R};
+		const unsigned int audioOutB[NUM_PLAYERS] = {AUDIO_OUT_P1_T, AUDIO_OUT_P2_T, AUDIO_OUT_P3_T};
 		for(int i = 0; i < NUM_PLAYERS; i++) {
 			float r = sqrtf(gPlayers[i].x*gPlayers[i].x + gPlayers[i].y*gPlayers[i].y);
-			float rNorm = r / kRMax; // 0..1 (may momentarily exceed 1 due to soft wall)
+			float rNorm = r / kRMax; // 0..1
 			if(rNorm > 1.0f) rNorm = 1.0f;
 			float theta = atan2f(gPlayers[i].y, gPlayers[i].x);
 			float thetaNorm = (theta + (float)M_PI) / (2.0f * (float)M_PI); // -π..+π → 0..1
 			gROut[i]    = rNorm;
 			gThetaOut[i] = thetaNorm;
-			if(audioOutR[i] < context->audioOutChannels) audioWrite(context, frame, audioOutR[i], rNorm);
-			if(audioOutT[i] < context->audioOutChannels) audioWrite(context, frame, audioOutT[i], thetaNorm);
+
+			float outA, outB;
+			if(cartesian) {
+				outA = 0.5f + 0.5f * gPlayers[i].x;   // x,y ∈ [-1,1] → [0,1]
+				outB = 0.5f + 0.5f * gPlayers[i].y;
+				if(outA < 0.0f) outA = 0.0f; else if(outA > 1.0f) outA = 1.0f;
+				if(outB < 0.0f) outB = 0.0f; else if(outB > 1.0f) outB = 1.0f;
+			} else {
+				outA = rNorm;
+				outB = thetaNorm;
+			}
+			if(audioOutA[i] < context->audioOutChannels) audioWrite(context, frame, audioOutA[i], outA);
+			if(audioOutB[i] < context->audioOutChannels) audioWrite(context, frame, audioOutB[i], outB);
 		}
 
 		// Write IT gates while frozen too (state is unchanged, but pins still need driving).
@@ -375,11 +375,7 @@ void render(BelaContext *context, void *userData) {
 			digitalWrite(context, frame, DIGITAL_IT1, gIT == 0 ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_IT2, gIT == 1 ? 1 : 0);
 			digitalWrite(context, frame, DIGITAL_IT3, gIT == 2 ? 1 : 0);
-			digitalWrite(context, frame, DIGITAL_TAG,     0);
-			digitalWrite(context, frame, DIGITAL_WALL1,   0);
-			digitalWrite(context, frame, DIGITAL_WALL2,   0);
-			digitalWrite(context, frame, DIGITAL_WALL3,   0);
-			digitalWrite(context, frame, DIGITAL_WALLANY, 0);
+			digitalWrite(context, frame, DIGITAL_TAG, 0);
 		}
 	}
 }
