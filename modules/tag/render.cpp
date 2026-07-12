@@ -31,7 +31,7 @@ const float kCatchRadius = 0.15f;   // distance threshold for tag transfer
 // spanning slow-LFO motion up to audio-rate. (Linear would cram the slow region into a
 // sliver of the knob once the top is audio-rate.) DAMPING maps [0,1] linearly to
 // [0, kMaxDamping]; low DAMPING + high SPEED gives fast, sustained (oscillating) motion.
-const float kSpeedMin   = 2.0f;      // accel at SPEED cv=0 — slow LFO regime (units/s²)
+const float kSpeedMin   = 0.5f;      // accel at SPEED cv=0 — very slow LFO regime (units/s²)
 const float kSpeedMax   = 6000.0f;   // accel at SPEED cv=1 — audio-rate motion
 const float kMaxDamping = 2.5f;      // full-CV damping (halved from 5.0 for finer low-end control)
 

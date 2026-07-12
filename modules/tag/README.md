@@ -59,7 +59,7 @@ CLAUDE.md marks r_max, catch radius as "TBD during Bela prototype tuning" — ad
 
 ## Status
 
-New module — GUI-controllable, builds clean, not yet deployed to hardware. No dedicated desktop test — game/physics logic is tightly coupled to this module's I/O rather than a reusable `lib/dsp/` unit.
+Initial tests are good. No dedicated desktop test — game/physics logic is tightly coupled to this module's I/O rather than a reusable `lib/dsp/` unit.
 
 ## Deploy
 
