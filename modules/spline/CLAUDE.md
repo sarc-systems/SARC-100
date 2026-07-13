@@ -44,6 +44,18 @@ scan in lockstep.
   exactness, smooth-mode C1 continuity + no NaN/inf, open-curve clamping at the ends (NOT
   wrapping), and continuous morphing between interpolation characters.
 
+## Voltage conventions
+- **SEGMENT values and OUT are bipolar** (±full-scale, 0.5 = 0 V), matching the rest of the
+  system: segment CV is read `2v−1`, knot sliders are bipolar (default 0 = center), OUT is
+  written `0.5 + 0.5·x` (clamped — smooth-mode Catmull-Rom can overshoot the knot range).
+- **SCAN and INTERPOLATE stay unipolar [0,1]** — a read position and a morph amount, not
+  bipolar values. SCAN POSITION OUT is written raw [0,1] for chaining (its exact chained
+  voltage is unconfirmed — see below).
+- **Assumes the segment CV front-end centers 0V at ADC mid** (0V → 0.5), like every other
+  bipolar input in the system. If a segment jack instead reads 0V → 0 (as observed on the
+  bench before this was set), knots sit low until the input is biased to center — a
+  front-end/calibration matter, not code.
+
 ## I/O — UNCONFIRMED, no pin numbers were specified when this module was designed
 See `pins.h`. Current placeholder uses the full standard 0-7 analog range (6 segments + SCAN +
 INTERPOLATE = exactly 8, fits without a wing-off header) and audio outs 2/3 (DC-coupled,

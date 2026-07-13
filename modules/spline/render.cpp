@@ -26,9 +26,8 @@
 Gui gui;
 GuiController controller;
 
-unsigned int gSegmentSliderIdx[NUM_SEGMENTS];
-unsigned int gScanSliderIdx;
-unsigned int gInterpolateSliderIdx;
+// No GUI control sliders — all parameters are CV-driven (the hardware front-end sums each
+// input's att + bias/offset into the CV before the ADC). The GUI is display-only.
 
 // Display-only readouts — written only from the aux meter task (setSliderValue is not
 // RT-safe), never read back as control input. Mirrors tine/servo's *DisplaySliderIdx
@@ -53,6 +52,13 @@ float gInterpolateIn = 0.0f;
 inline float clamp01(float x) {
 	return fminf(fmaxf(x, 0.0f), 1.0f);
 }
+
+// Bipolar conventions — segment values and OUT are bipolar ±full-scale (0.5 = 0V),
+// matching the rest of the system. SCAN and INTERPOLATE stay unipolar [0,1] (they are a
+// read position and a morph amount, not bipolar values).
+inline float clampBip(float x)  { return fminf(fmaxf(x, -1.0f), 1.0f); }  // clamp to [-1,1]
+inline float bipolarIn(float v) { return 2.0f * v - 1.0f; }               // ADC [0,1] -> [-1,1]
+inline float toDcOut(float x)   { return clamp01(0.5f + 0.5f * x); }       // [-1,1] -> DAC [0,1]
 
 inline int analogFrameForAudio(BelaContext *context, int audioFrame) {
 	if(context->analogFrames == 0) return 0;
@@ -85,15 +91,7 @@ bool setup(BelaContext *context, void *userData) {
 	gui.setup(context->projectName);
 	controller.setup(&gui, "Spline");
 
-	for(int i = 0; i < NUM_SEGMENTS; i++) {
-		char label[16];
-		snprintf(label, sizeof(label), "Segment %d", i + 1);
-		gSegmentSliderIdx[i] = controller.addSlider(label, 0.5, 0.0, 1.0, 0.001);
-	}
-	gScanSliderIdx        = controller.addSlider("Scan",        0.0, 0.0, 1.0, 0.001);
-	gInterpolateSliderIdx = controller.addSlider("Interpolate", 0.5, 0.0, 1.0, 0.001);
-
-	gOutDisplaySliderIdx          = controller.addSlider("Out (eff)",           0.0, 0.0, 1.0, 0.001);
+	gOutDisplaySliderIdx          = controller.addSlider("Out (eff)",           0.0, -1.0, 1.0, 0.001);
 	gScanPositionDisplaySliderIdx = controller.addSlider("Scan Position (eff)", 0.0, 0.0, 1.0, 0.001);
 
 	for(int i = 0; i < NUM_SEGMENTS; i++) {
@@ -111,25 +109,23 @@ bool setup(BelaContext *context, void *userData) {
 }
 
 void render(BelaContext *context, void *userData) {
-	// Block-rate CVs (GUI slider + CV summed: knob sets a base value, an unpatched jack
-	// contributes nothing). Segments and INTERPOLATE change slowly — no need for audio-rate
-	// reads. SCAN is read per-audio-frame below instead, since it's the one input expected
-	// to move fast (a scan sweep is the point of this module).
+	// Block-rate CVs (CV-only; the hardware front-end applies att + bias/offset before the
+	// ADC). Segments and INTERPOLATE change slowly — no need for audio-rate reads. SCAN is
+	// read per-audio-frame below, since it's the one input expected to move fast.
 	for(int i = 0; i < NUM_SEGMENTS; i++) {
 		float cv = 0.0f;
 		if(context->analogFrames > 0 && kSegmentAnalogIn[i] < (int)context->analogInChannels)
 			cv = analogRead(context, 0, kSegmentAnalogIn[i]);
 		gSegmentIn[i] = cv;
-		float segmentValue = clamp01(controller.getSliderValue(gSegmentSliderIdx[i]) + cv);
-		gSpline.setKnot(i, segmentValue);
+		// Bipolar knot from bipolar CV (0V = ADC mid-scale, like the other bipolar modules).
+		gSpline.setKnot(i, clampBip(bipolarIn(cv)));
 	}
 
 	float cvInterpolate = 0.0f;
 	if(context->analogFrames > 0 && ANALOG_INTERPOLATE_CV < context->analogInChannels)
 		cvInterpolate = analogRead(context, 0, ANALOG_INTERPOLATE_CV);
 	gInterpolateIn = cvInterpolate;
-	float interpolate = clamp01(controller.getSliderValue(gInterpolateSliderIdx) + cvInterpolate);
-	gSpline.setInterpolation(interpolate);
+	gSpline.setInterpolation(clamp01(cvInterpolate));   // unipolar [0,1] morph amount
 
 	for(int frame = 0; frame < context->audioFrames; frame++) {
 		int af = (context->analogFrames > 0) ? analogFrameForAudio(context, frame) : 0;
@@ -137,14 +133,16 @@ void render(BelaContext *context, void *userData) {
 		float cvScan = (context->analogFrames > 0 && ANALOG_SCAN_CV < context->analogInChannels)
 			? analogRead(context, af, ANALOG_SCAN_CV) : 0.0f;
 		gScanIn = cvScan;
-		float scanPosition = clamp01(controller.getSliderValue(gScanSliderIdx) + cvScan); // open curve — clamp, don't wrap
+		float scanPosition = clamp01(cvScan); // unipolar [0,1] read position; open curve — clamp, don't wrap
 
 		float out = gSpline.evaluate(scanPosition);
 		gEffOut = out;
 		gEffScanPosition = scanPosition;
 
 		if(AUDIO_OUT_OUT < context->audioOutChannels) {
-			audioWrite(context, frame, AUDIO_OUT_OUT, out);
+			// Bipolar value -> DAC (0.5 = 0V). Smooth-mode Catmull-Rom can overshoot the
+			// knot range, so toDcOut clamps.
+			audioWrite(context, frame, AUDIO_OUT_OUT, toDcOut(out));
 		}
 		if(AUDIO_OUT_SCAN_POSITION < context->audioOutChannels) {
 			// The clamped, post-bias/attenuverter position actually used to read the

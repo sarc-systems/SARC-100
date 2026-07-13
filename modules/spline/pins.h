@@ -19,5 +19,5 @@
 #define ANALOG_INTERPOLATE_CV 7
 
 // Audio out — DC-coupled (Gem Multi audio outs 2-9), carrying scanned/slow CV rather than audio.
-#define AUDIO_OUT_OUT           2
-#define AUDIO_OUT_SCAN_POSITION 3
+#define AUDIO_OUT_OUT           3
+#define AUDIO_OUT_SCAN_POSITION 2
