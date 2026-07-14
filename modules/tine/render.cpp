@@ -665,9 +665,11 @@ void render(BelaContext *context, void *userData) {
         // below has used it for this frame — see the sync-pull term in that loop.
         bool syncPullActive = gSyncPullSamplesRemaining > 0;
 
+        static const int kAudioInPin[NUM_CHANNELS] = {AUDIO_IN_A, AUDIO_IN_B};
         for(int ch = 0; ch < NUM_CHANNELS; ch++) {
-            // ch indexes both SPEC_A/SPEC_B and AUDIO_IN_A/AUDIO_IN_B identically — see pins.h
-            float allIn = audioRead(context, frame, ch);
+            // ch = SPEC_A/SPEC_B; map to the actual audio-in jack (pins.h), which is NOT
+            // necessarily the same channel number.
+            float allIn = audioRead(context, frame, kAudioInPin[ch]);
             inputAbs[ch] = fabsf(allIn);
             gInPeakHold[ch] = fmaxf(inputAbs[ch], gInPeakHold[ch] * kPeakDecay);
 
