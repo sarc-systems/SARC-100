@@ -23,11 +23,18 @@ assume a single global instance.
 
 ## Core behavior (the control loop)
 - `MAGNI(ref)` and `MAGNI(sig)` extract magnitude/envelope from REF and SIG respectively.
-  Independent outputs — **no internal routing to TARGET or ERROR**. MAGNI(ref) sits adjacent to
-  the TARGET jack on the panel purely so a shorting bar or patch cable can manually bridge them if
-  desired. No normalling, no default signal path. If you want the old "ref's envelope is the
-  target" behavior, patch MAGNI(ref) into TARGET externally.
-- `ERROR = TARGET - SIG`. Raw deviation, unprocessed — uses the raw jacks, not MAGNI.
+  Both are exported as outputs. `MAGNI(ref)` has **no internal routing** — it's output-only; patch
+  it into TARGET externally to follow REF's envelope (it sits adjacent to the TARGET jack on the
+  panel so a shorting bar or cable can bridge them). `MAGNI(sig)` is also an output, but is
+  *additionally* selectable into ERROR via the **Error Sig Term** switch (see below) — that's the
+  one internal route, and it's opt-in. No normalling, no default signal path otherwise.
+- `ERROR = TARGET - (SIG term)`, where the **Error Sig Term** switch selects the SIG side:
+  raw SIG (signed value-following, the original behavior) or `MAGNI(sig)` (level-following, so a
+  fast loop compares SIG's *envelope* to TARGET instead of chasing the raw waveform). TARGET is
+  always the reference on both paths — its bias knob sets a setpoint even with nothing patched, and
+  patching a reference's magnitude (e.g. `MAGNI(ref)`) into TARGET makes the loop follow a live
+  signal's level. Only the SIG side switches; the reference path is untouched. Raw mode stays the
+  default because rectified MAGNI is unsigned — signed/bipolar/DC servoing needs the raw term.
 - A **PID** produces `EFF`, the drive signal that acts on the plant. Includes derivative
   filtering and **anti-windup** (conditional integration) — REQUIRED, because in feedback patches
   the servo is frequently asked for an unreachable target and must not wind up.
@@ -53,12 +60,18 @@ internal constant in `render.cpp`, not CV/GUI-exposed — there is no Governor-T
 in this design. It's still kept slower than the loop by construction (a fixed fraction of the
 loop's own rate), just not user-tunable yet.
 
-## I/O (24 panel elements total)
+## I/O (25 panel elements total — was 24 before the ERROR SIG TERM switch)
 CV inputs (5), each with jack + attenuverter + offset:
 - `TARGET`, `REF`, `SIG`, `ENV RATE`, `SERVO RATE`
 
 CV outputs (5), jack only:
 - `ERROR`, `EFF` (+ UNI/BIPOLAR switch), `CONFIDENCE`, `MAGNI(ref)`, `MAGNI(sig)`
+
+Indicators (diagnostic, not a CV output):
+- `EFF PINNED` — peak-hold saturation detector: fires (1.0) when EFF reaches a drive rail (outMax
+  always; outMin too in bipolar), then fades over ~0.25 s so a momentary pin stays visible.
+  Exposed as a GUI meter now ("EFF Pinned (eff)"); the same 0..1 value is intended to drive a
+  panel LED (PWM brightness) once hardware exists.
 
 Digital I/O (4):
 - `FREEZE` (jack) — gate. Holds **only** the PID/EFF stage at its current value (integrator stops
@@ -69,10 +82,13 @@ Digital I/O (4):
   - `last` → EFF held at current value; integrator re-seeded so resumption is BUMPLESS
 - `RESET MODE` switch — 0V vs last-value/bumpless (see above)
 - `EFF UNI/BIPOLAR` switch — output range -1..1 vs 0..1
+- `ERROR SIG TERM` switch — SIG side of ERROR: raw SIG (signed value-follow) vs `MAGNI(sig)`
+  (level-follow). Design default is raw (general signed servo), but the code default is
+  temporarily env + unipolar EFF for level-follow testing (see `render.cpp` setup comment).
 
 Removed from the original seed: SPLINE 1-5, TENSION (no internal target-curve anymore — TARGET is
 independent), GOVERNOR TIME MULT (CONFIDENCE's rate is now a fixed constant), EFFECTOR INVERT (not
-part of the new 24-element panel count).
+part of the new panel count).
 
 ## Output signal type
 EFF + CONFIDENCE together still form the SARC universal type **(value, confidence)** for
@@ -87,7 +103,9 @@ memory surface can attach later without retrofitting.
 
 ## Code organization (IMPORTANT)
 - `lib/` is the SHARED, Bela-AGNOSTIC core. PID (`lib/dsp/pid`), confidence/slow-integrator
-  (`lib/dsp/confidence`), envelope follower (`lib/dsp/envelope`) are used by this module.
+  (`lib/dsp/confidence`), envelope follower (`lib/dsp/envelope`), and peak-hold (`lib/dsp/peak_hold`,
+  the EFF pin/saturation detector) are used by this module. CV input conditioning is `lib/io/cv_input`
+  (`CvIn`, wraps `analogRead` + `Smoother`) — TARGET/ENV RATE/SERVO RATE go through it; REF/SIG stay raw.
   `lib/dsp/spline` is no longer used by SERVO (TARGET is now independent) — it was generalized
   (`Spline5` -> templated `Spline<N>`, open curve, 3-way interpolation character) and is now
   owned by `modules/spline/`. Write all of these as plain C++ with NO Bela dependencies so they
@@ -98,9 +116,9 @@ memory surface can attach later without retrofitting.
 
 ## Testing
 - `test/test_servo_dsp.cpp` exercises the `lib/dsp/` units directly (PID + plant sim, confidence
-  leaky-integrator behavior, spline — still tested even though SERVO itself no longer calls it,
-  since other modules may). Validate math on desktop BEFORE running on the Bela; only the I/O
-  glue needs the device.
+  leaky-integrator behavior, peak-hold snap/fade/retrigger, spline — still tested even though SERVO
+  itself no longer calls it, since other modules may). Validate math on desktop BEFORE running on
+  the Bela; only the I/O glue needs the device. Run via `test/run.sh`.
 - Not yet covered on desktop: the CONFIDENCE = magnitudeScore * stabilityScore formula lives in
   `render.cpp` itself (not `lib/dsp/`), since it's specific to this module's wiring rather than a
   generic reusable unit — there's no desktop test for it yet.

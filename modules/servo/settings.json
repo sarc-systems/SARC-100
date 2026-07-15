@@ -1,7 +1,7 @@
 {
     "version": 2,
     "parameters": {
-        "blockSize": 16,
+        "blockSize": 8,
         "bitDepth": 24,
         "sampleRate": 96000,
         "analogChannels": 8,

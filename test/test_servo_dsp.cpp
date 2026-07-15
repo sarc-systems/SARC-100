@@ -8,6 +8,7 @@
 
 #include "../lib/dsp/pid.h"
 #include "../lib/dsp/confidence.h"
+#include "../lib/dsp/peak_hold.h"
 
 static int gChecks = 0;
 
@@ -176,12 +177,56 @@ static void testConfidenceSlowerThanLoop() {
 		confidenceSteps, loopSteps);
 }
 
+// ---------------------------------------------------------------------------
+// PeakHold (EFF pin / saturation detector)
+// ---------------------------------------------------------------------------
+
+static void testPeakHoldSnapsAndFades() {
+	// callPeriod 1 ms, hold time constant 0.25 s.
+	PeakHold p;
+	p.init(0.001f, 0.25f);
+
+	// A single event snaps the output straight to the peak.
+	CHECK(nearlyEqual(p.process(1.0f), 1.0f, 1e-6f));
+
+	// With no further events it decays monotonically toward 0, staying below the peak.
+	float prev = p.value();
+	bool monotonicDown = true;
+	for (int i = 0; i < 250; i++) {
+		float v = p.process(0.0f);
+		if (v > prev + 1e-6f) monotonicDown = false;
+		prev = v;
+	}
+	CHECK(monotonicDown);
+	CHECK(p.value() < 1.0f);
+	// ~one time constant of decay (250 * 1 ms = 0.25 s) lands near 1/e.
+	CHECK(nearlyEqual(p.value(), expf(-1.0f), 0.02f));
+	printf("ok: peak-hold snaps to peak and decays ~1/e per time constant\n");
+}
+
+static void testPeakHoldRetriggerHolds() {
+	// Sustained events hold the output pinned at the peak (no sag between hits).
+	PeakHold p;
+	p.init(0.001f, 0.25f);
+	for (int i = 0; i < 500; i++) p.process(1.0f);
+	CHECK(nearlyEqual(p.value(), 1.0f, 1e-6f));
+
+	// A higher peak overrides a lower held value immediately.
+	PeakHold q;
+	q.init(0.001f, 0.25f);
+	q.process(0.3f);
+	CHECK(nearlyEqual(q.process(0.9f), 0.9f, 1e-6f));
+	printf("ok: peak-hold stays pinned while retriggered and rises to new peaks\n");
+}
+
 int main() {
 	testPidConvergesOnReachableSetpoint();
 	testPidAntiWindup();
 	testPidBumplessReset();
 	testConfidenceRisesAndDecays();
 	testConfidenceSlowerThanLoop();
+	testPeakHoldSnapsAndFades();
+	testPeakHoldRetriggerHolds();
 	printf("PASS: %d checks\n", gChecks);
 	return 0;
 }

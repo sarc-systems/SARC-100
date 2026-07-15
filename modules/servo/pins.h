@@ -19,11 +19,11 @@
 #define ANALOG_SERVO_RATE_CV  4   // PID loop timescale
 
 // Audio out — all DC-coupled (Gem Multi audio outs 2-9), carrying slow CV rather than audio.
-#define AUDIO_OUT_EFFECTOR    2   // confirmed DC-coupled
-#define AUDIO_OUT_ERROR       3   // ASSUMPTION — not yet confirmed
-#define AUDIO_OUT_CONFIDENCE  4   // ASSUMPTION — not yet confirmed
-#define AUDIO_OUT_MAGNI_REF   5   // ASSUMPTION — not yet confirmed
-#define AUDIO_OUT_MAGNI_SIG   6   // ASSUMPTION — not yet confirmed
+#define AUDIO_OUT_EFFECTOR    3
+#define AUDIO_OUT_ERROR       6   // ASSUMPTION — not yet confirmed
+#define AUDIO_OUT_CONFIDENCE  2
+#define AUDIO_OUT_MAGNI_REF   4   // ASSUMPTION — not yet confirmed
+#define AUDIO_OUT_MAGNI_SIG   5   // ASSUMPTION — not yet confirmed
 
 // Digital
 #define DIGITAL_FREEZE 0   // gate — hold while high

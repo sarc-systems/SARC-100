@@ -5,6 +5,8 @@
 #include "../../lib/dsp/envelope.h"
 #include "../../lib/dsp/pid.h"
 #include "../../lib/dsp/confidence.h"
+#include "../../lib/dsp/peak_hold.h"
+#include "../../lib/io/cv_input.h"
 #else
 #include <Bela.h>
 #include <libraries/Gui/Gui.h>
@@ -13,6 +15,8 @@
 #include "lib/dsp/envelope.h"
 #include "lib/dsp/pid.h"
 #include "lib/dsp/confidence.h"
+#include "lib/dsp/peak_hold.h"
+#include "lib/io/cv_input.h"
 #endif
 #include <stdlib.h>
 #include <math.h>
@@ -50,11 +54,10 @@ float gEffectorLfoTestPhase = 0.0f;
 Gui gui;
 GuiController controller;
 
-unsigned int gEnvRateSliderIdx;
-unsigned int gServoRateSliderIdx;
 unsigned int gPidKpSliderIdx;
 unsigned int gEffectorBipolarSliderIdx;
 unsigned int gResetModeSliderIdx;
+unsigned int gSigTermSliderIdx;
 
 // Display-only readouts — written only from the aux meter task (setSliderValue
 // is not RT-safe), never read back as control input. Mirrors tine's
@@ -64,6 +67,7 @@ unsigned int gErrorDisplaySliderIdx;
 unsigned int gConfidenceDisplaySliderIdx;
 unsigned int gMagniRefDisplaySliderIdx;
 unsigned int gMagniSigDisplaySliderIdx;
+unsigned int gPinnedDisplaySliderIdx;
 
 // Raw-CV input meters (A2-A4) — these three have no envelope/processing stage, so the meter
 // is the literal analogRead value. REF/SIG's processed form (MAGNI) is one of the "(eff)"
@@ -78,16 +82,24 @@ struct ServoChannel {
 	EnvelopeFollower slewEnv;   // smooths |d(error)/dt| for the CONFIDENCE stability metric
 	PID pid;
 	Confidence confidence;
+	PeakHold effPin;            // EFF pin detector: peak-hold, fires at a drive rail, then fades
 	float lastError = 0.0f;
 };
 
 ServoChannel gServo[NUM_SERVO_CHANNELS];
+
+// Standardized, smoothed CV inputs (lib/io/CvIn) — reject ADC quantization steps and
+// pot/wiper noise, matching drivetrain/tine. These are block-rate controls + the setpoint;
+// REF/SIG stay raw audio-rate reads in the frame loop (the servo loop and envelope followers
+// need the instantaneous signal, so they are deliberately NOT routed through CvIn).
+CvIn gCvTarget, gCvEnvRate, gCvServoRate;
 
 float gEffEffector[NUM_SERVO_CHANNELS]   = {0.0f};
 float gEffError[NUM_SERVO_CHANNELS]      = {0.0f};
 float gEffConfidence[NUM_SERVO_CHANNELS] = {0.0f};
 float gEffMagniRef[NUM_SERVO_CHANNELS]   = {0.0f};
 float gEffMagniSig[NUM_SERVO_CHANNELS]   = {0.0f};
+float gEffPinned[NUM_SERVO_CHANNELS]     = {0.0f};
 
 float gEnvRateIn = 0.0f;
 float gServoRateIn = 0.0f;
@@ -158,6 +170,11 @@ const float kConfidenceSlewReferenceRate = 4.0f;
 const float kConfidenceRateFraction = 0.1f;
 float gConfidenceSlewCoeff = 1.0f;
 
+// EFF pin detector (PeakHold, lib/dsp): fires when the effector reaches a drive rail and fades
+// over kEffPinHoldTimeConstS, so even a momentary pin stays visible (a meter now, an LED later).
+const float kEffPinEps = 1e-3f;              // how close to a rail counts as pinned
+const float kEffPinHoldTimeConstS = 0.25f;   // fade time after the pin releases
+
 // RESET (trigger): clears the PID integrator; resetMode only changes what the effector does.
 // kResetModeZero -> neutral. kResetModeLast -> held at its current value, integrator
 // re-seeded so resumption is bumpless (see PID::reset(seedOutput, currentError)). CONFIDENCE
@@ -180,6 +197,7 @@ void meterGuiTask(void *) {
 		controller.setSliderValue(gConfidenceDisplaySliderIdx, gEffConfidence[0]);
 		controller.setSliderValue(gMagniRefDisplaySliderIdx,   gEffMagniRef[0]);
 		controller.setSliderValue(gMagniSigDisplaySliderIdx,   gEffMagniSig[0]);
+		controller.setSliderValue(gPinnedDisplaySliderIdx,     gEffPinned[0]);
 
 		controller.setSliderValue(gEnvRateInDisplaySliderIdx,   gEnvRateIn);
 		controller.setSliderValue(gServoRateInDisplaySliderIdx, gServoRateIn);
@@ -196,17 +214,19 @@ bool setup(BelaContext *context, void *userData) {
 	gui.setup(context->projectName);
 	controller.setup(&gui, "Servo");
 
-	gEnvRateSliderIdx          = controller.addSlider("Env Rate",                     0.5, 0.0, 1.0, 0.001);
-	gServoRateSliderIdx        = controller.addSlider("Servo Rate",                   0.5, 0.0, 1.0, 0.001);
 	gPidKpSliderIdx            = controller.addSlider("PID Kp",                       1.0, 0.0, 5.0, 0.001);
-	gEffectorBipolarSliderIdx  = controller.addSlider("Effector Bipolar (0/1)",        1.0, 0.0, 1.0, 1.0);
+	gEffectorBipolarSliderIdx  = controller.addSlider("Effector Bipolar (0/1)",        0.0, 0.0, 1.0, 1.0);
 	gResetModeSliderIdx        = controller.addSlider("Reset Mode (0=zero/1=last)",    0.0, 0.0, 1.0, 1.0);
+	// Testing defaults (temporary): env-mode error + unipolar effector — the level-follow patch
+	// under test. Flip Error Sig Term back to 0 (raw) for the general signed-servo default.
+	gSigTermSliderIdx          = controller.addSlider("Error Sig Term (0=raw/1=env)", 1.0, 0.0, 1.0, 1.0);
 
 	gEffectorDisplaySliderIdx   = controller.addSlider("Effector (eff)",   0.0, -1.0, 1.0, 0.001);
 	gErrorDisplaySliderIdx      = controller.addSlider("Error (eff)",      0.0, -1.0, 1.0, 0.001);
 	gConfidenceDisplaySliderIdx = controller.addSlider("Confidence (eff)", 0.0,  0.0, 1.0, 0.001);
 	gMagniRefDisplaySliderIdx   = controller.addSlider("Magni Ref (eff)",  0.0,  0.0, 1.0, 0.001);
 	gMagniSigDisplaySliderIdx   = controller.addSlider("Magni Sig (eff)",  0.0,  0.0, 1.0, 0.001);
+	gPinnedDisplaySliderIdx     = controller.addSlider("EFF Pinned (eff)", 0.0,  0.0, 1.0, 0.001);
 
 	gTargetInDisplaySliderIdx    = controller.addSlider("Target IN (A0)",     0.0, 0.0, 1.0, 0.001);
 	gEnvRateInDisplaySliderIdx   = controller.addSlider("Env Rate IN (A3)",   0.0, 0.0, 1.0, 0.001);
@@ -219,31 +239,40 @@ bool setup(BelaContext *context, void *userData) {
 	Bela_scheduleAuxiliaryTask(meterTask);
 
 	gConfidenceSlewCoeff = 1.0f - expf(-1.0f / (kConfidenceSlewTimeConstS * context->audioSampleRate));
+	float samplePeriodS = 1.0f / (float)context->audioSampleRate;
 	for(int ch = 0; ch < NUM_SERVO_CHANNELS; ch++) {
 		gServo[ch].pid.setOutputLimits(-1.0f, 1.0f);
 		gServo[ch].slewEnv.setCoeffs(gConfidenceSlewCoeff, gConfidenceSlewCoeff);
+		gServo[ch].effPin.init(samplePeriodS, kEffPinHoldTimeConstS);
 	}
+
+	gCvTarget.setup(ANALOG_TARGET_CV, context);
+	gCvEnvRate.setup(ANALOG_ENV_RATE_CV, context);
+	gCvServoRate.setup(ANALOG_SERVO_RATE_CV, context);
 
 	return true;
 }
 
 void render(BelaContext *context, void *userData) {
-	// Block-rate CVs (GUI slider + CV summed: knob sets a base value, an unpatched jack
-	// contributes nothing). TARGET has no GUI base value — like REF/SIG, it's a signal, not
-	// a rate/shape parameter — so it's pure CV, read per-frame below alongside REF/SIG.
-	float cvEnvRate = 0.0f, cvServoRate = 0.0f;
-	if(context->analogFrames > 0) {
-		if(ANALOG_ENV_RATE_CV < context->analogInChannels) cvEnvRate = analogRead(context, 0, ANALOG_ENV_RATE_CV);
-		if(ANALOG_SERVO_RATE_CV < context->analogInChannels) cvServoRate = analogRead(context, 0, ANALOG_SERVO_RATE_CV);
-	}
+	// Block-rate CVs, read through CvIn (one-pole smoothed — rejects ADC/pot noise, like
+	// drivetrain/tine). CvIn.read() handles the no-analog-frames case (holds last value) and
+	// pin bounds internally. TARGET is the setpoint: it doesn't need audio-rate response, and
+	// smoothing it here removes the raw-ADC jitter that otherwise dominated the CONFIDENCE slew
+	// term. REF/SIG are NOT read here — they stay raw audio-rate reads in the frame loop, since
+	// the servo loop and envelope followers need the instantaneous signal.
+	float cvEnvRate   = gCvEnvRate.read(context);
+	float cvServoRate = gCvServoRate.read(context);
+	float target      = gCvTarget.read(context);
 	gEnvRateIn = cvEnvRate;
 	gServoRateIn = cvServoRate;
+	gTargetIn = target;
 
-	float envRate   = clamp01(controller.getSliderValue(gEnvRateSliderIdx) + cvEnvRate);
-	float servoRate = clamp01(controller.getSliderValue(gServoRateSliderIdx) + cvServoRate);
+	float envRate   = clamp01(cvEnvRate);   // CV-only; monitor via "Env Rate IN" meter
+	float servoRate = clamp01(cvServoRate); // CV-only; monitor via "Servo Rate IN" meter
 	float kp = controller.getSliderValue(gPidKpSliderIdx);
 	bool bipolar = controller.getSliderValue(gEffectorBipolarSliderIdx) >= 0.5f;
 	int resetMode = (controller.getSliderValue(gResetModeSliderIdx) >= 0.5f) ? kResetModeLast : kResetModeZero;
+	bool sigTermMagni = controller.getSliderValue(gSigTermSliderIdx) >= 0.5f;
 
 	float samplePeriod = 1.0f / (float)context->audioSampleRate;
 
@@ -299,10 +328,11 @@ void render(BelaContext *context, void *userData) {
 		for(int ch = 0; ch < NUM_SERVO_CHANNELS; ch++) {
 			ServoChannel &s = gServo[ch];
 
+			// REF/SIG: raw audio-rate reads (NOT smoothed via CvIn) — the servo loop and the
+			// envelope followers below need the instantaneous signal. TARGET is read block-rate
+			// through gCvTarget above (setpoint; smoothed).
 			float ref = (context->analogFrames > 0 && ANALOG_REF_CV < context->analogInChannels) ? analogRead(context, af, ANALOG_REF_CV) : 0.0f;
 			float sig = (context->analogFrames > 0 && ANALOG_SIG_CV < context->analogInChannels) ? analogRead(context, af, ANALOG_SIG_CV) : 0.0f;
-			float target = (context->analogFrames > 0 && ANALOG_TARGET_CV < context->analogInChannels) ? analogRead(context, af, ANALOG_TARGET_CV) : 0.0f;
-			gTargetIn = target;
 
 			// MAGNI(ref)/MAGNI(sig): independent outputs, no internal routing to TARGET or
 			// ERROR (per spec) — REF's envelope has no other use in this module.
@@ -311,8 +341,15 @@ void render(BelaContext *context, void *userData) {
 			gEffMagniRef[ch] = magniRef;
 			gEffMagniSig[ch] = magniSig;
 
-			// ERROR = TARGET - SIG, raw deviation — uses the unprocessed jacks, not MAGNI.
-			float error = target - sig;
+			// ERROR = TARGET - (SIG term). The Error Sig Term switch selects the SIG side:
+			// raw jack -> signed value-following (compares the instantaneous SIG against
+			// TARGET), or MAGNI(sig) -> level-following (compares SIG's envelope, so a fast
+			// loop no longer chases the raw waveform). TARGET is always the reference on both
+			// paths — its bias knob sets a setpoint even unpatched, and patching a reference's
+			// magnitude (e.g. MAGNI(ref)) into TARGET makes the loop follow a live signal's
+			// level. Only the SIG term switches; the reference path is untouched.
+			float sigTerm = sigTermMagni ? magniSig : sig;
+			float error = target - sigTerm;
 
 			// CONFIDENCE: magnitude AND stability, parallel to EFF, not gated by FREEZE and
 			// not fed back into ERROR/EFF. Large error -> low confidence even if steady;
@@ -332,6 +369,16 @@ void render(BelaContext *context, void *userData) {
 			gEffEffector[ch] = effector;
 			gEffError[ch]    = error;
 			gEffConfidence[ch] = confidence;
+
+			// EFF pin detector: fires when the effector reaches a drive rail — outMax always,
+			// and outMin too in bipolar mode (full-negative drive). Unipolar's 0 rail is idle
+			// (VCA closed), not "pinned," so it's excluded. The PeakHold snaps to 1.0 on a pin
+			// then fades, so even a momentary saturation stays visible. FREEZE isn't special-
+			// cased: a frozen-at-rail EFF genuinely is pinned. Same 0..1 value feeds a GUI meter
+			// now and an LED (PWM brightness) later.
+			bool effPinned = (effector >= outMax - kEffPinEps)
+			                 || (bipolar && effector <= outMin + kEffPinEps);
+			gEffPinned[ch] = s.effPin.process(effPinned ? 1.0f : 0.0f);
 
 			if(AUDIO_OUT_EFFECTOR < context->audioOutChannels) {
 #if SERVO_EFFECTOR_LFO_TEST_ENABLED
