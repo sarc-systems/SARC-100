@@ -124,6 +124,25 @@ static void testPidBumplessReset() {
 	printf("ok: PID RESET=last is bumpless (next=%.5f, seed=%.5f)\n", next, seedOutput);
 }
 
+static void testPidBumplessGainChange() {
+	// Sweeping a gain-scheduled ki (as SERVO RATE does) must not bump the output: the
+	// integral is stored unscaled, so setGains rescales it to preserve ki*integral.
+	PID pid;
+	pid.setOutputLimits(-1.0f, 1.0f);
+	pid.setGains(1.0f, 2.0f, 0.0f);   // kp, ki, kd
+
+	// Build a steady holding output against a constant error.
+	float dt = 0.001f;
+	float out = 0.0f;
+	for (int i = 0; i < 500; i++) out = pid.update(0.2f, dt);
+
+	// Change ki sharply (2 -> 5). Without bumpless rescaling, ki*integral would jump.
+	pid.setGains(1.0f, 5.0f, 0.0f);
+	float outAfter = pid.update(0.2f, dt);
+	CHECK(nearlyEqual(outAfter, out, 5e-3f));
+	printf("ok: PID gain change is bumpless (%.4f -> %.4f on ki 2->5)\n", out, outAfter);
+}
+
 // ---------------------------------------------------------------------------
 // Confidence
 // ---------------------------------------------------------------------------
@@ -223,6 +242,7 @@ int main() {
 	testPidConvergesOnReachableSetpoint();
 	testPidAntiWindup();
 	testPidBumplessReset();
+	testPidBumplessGainChange();
 	testConfidenceRisesAndDecays();
 	testConfidenceSlowerThanLoop();
 	testPeakHoldSnapsAndFades();

@@ -10,6 +10,15 @@
 class PID {
 public:
 	void setGains(float kp, float ki, float kd) {
+		// Bumpless integral-gain change. The integral is stored unscaled (output uses
+		// ki_ * integral_), so changing ki would instantly rescale the integral's
+		// contribution — an output bump when a gain-scheduled ki is swept (e.g. SERVO
+		// RATE scaling ki live). Rescale the stored integral to preserve ki_ * integral_
+		// across the change, so only the loop *dynamics* change, not the operating point.
+		// kp/kd need no such handling: at a steady point their terms are ~0.
+		if (fabsf(ki) > 1e-9f && fabsf(ki_) > 1e-9f && ki != ki_) {
+			integral_ *= ki_ / ki;
+		}
 		kp_ = kp;
 		ki_ = ki;
 		kd_ = kd;
