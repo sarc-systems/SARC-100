@@ -1,6 +1,6 @@
 # SARC-100
 
-Patch-programmable analog field computer — firmware and DSP for Bela.
+Patch-programmable synthesizer & field computer — firmware and DSP for Bela.
 
 ## Layout
 - `lib/`      — reusable, Bela-agnostic DSP + helpers (shared core; the library all modules build on)
